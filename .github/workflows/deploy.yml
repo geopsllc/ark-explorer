@@ -107,12 +107,12 @@ jobs:
             out=$(curl -s -X "$1" -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H "Content-Type: application/json" \
               "$api/$2" ${3:+--data "$3"})
             if [ "$(jq -r '.success' <<<"$out" 2>/dev/null)" != "true" ]; then
-              echo "Cloudflare $1 /$2 failed: $(jq -c '.errors // .' <<<"$out" 2>/dev/null || echo "$out")" >&2
+              echo "Cloudflare $1 /$2 failed: $(jq -c '.errors // .' <<<"$out" 2>/dev/null || echo "$out")" | tee "$RUNNER_TEMP/cf-error" >&2
               return 1
             fi
             jq -c '.result' <<<"$out"
           }
-          fail() { echo "::error::$1"; exit 1; }
+          fail() { echo "::error::$1 $(cat "$RUNNER_TEMP/cf-error" 2>/dev/null)"; exit 1; }
 
           target=$(cf GET "$project" | jq -r .subdomain) || fail "Cannot read the Pages project (token needs Account > Cloudflare Pages > Edit)."
 
