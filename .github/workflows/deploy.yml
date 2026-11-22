@@ -99,36 +99,51 @@ jobs:
       - name: Attach the custom domain and its DNS record
         if: steps.secrets.outputs.ok == 'true' && env.CUSTOM_DOMAIN != 'none'
         run: |
-          auth=(-H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H "Content-Type: application/json")
           api="https://api.cloudflare.com/client/v4"
-          project="$api/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/$PAGES_PROJECT"
-          target=$(curl -sf "${auth[@]}" "$project" | jq -r .result.subdomain)
+          project="accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/$PAGES_PROJECT"
+          # cf METHOD PATH [BODY]: prints the JSON result; on failure prints Cloudflare's errors and returns 1
+          cf() {
+            local out
+            out=$(curl -s -X "$1" -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H "Content-Type: application/json" \
+              "$api/$2" ${3:+--data "$3"})
+            if [ "$(jq -r '.success' <<<"$out" 2>/dev/null)" != "true" ]; then
+              echo "Cloudflare $1 /$2 failed: $(jq -c '.errors // .' <<<"$out" 2>/dev/null || echo "$out")" >&2
+              return 1
+            fi
+            jq -c '.result' <<<"$out"
+          }
+          fail() { echo "::error::$1"; exit 1; }
+
+          target=$(cf GET "$project" | jq -r .subdomain) || fail "Cannot read the Pages project (token needs Account > Cloudflare Pages > Edit)."
 
           # 1. the domain on the Pages project (idempotent)
-          if curl -sf "${auth[@]}" "$project/domains/$CUSTOM_DOMAIN" > /dev/null; then
+          if cf GET "$project/domains/$CUSTOM_DOMAIN" > /dev/null 2>&1; then
             echo "$CUSTOM_DOMAIN is already attached"
           else
-            curl -sf -X POST "${auth[@]}" "$project/domains" --data "{\"name\":\"$CUSTOM_DOMAIN\"}" > /dev/null
+            cf POST "$project/domains" "{\"name\":\"$CUSTOM_DOMAIN\"}" > /dev/null \
+              || fail "Cannot attach $CUSTOM_DOMAIN to the Pages project (see the error above)."
             echo "Attached $CUSTOM_DOMAIN"
           fi
 
           # 2. a proxied CNAME to the project's pages.dev name, in the zone that holds the domain
           zone=""; name="$CUSTOM_DOMAIN"
           while [ -z "$zone" ] && [[ "$name" == *.* ]]; do
-            zone=$(curl -sf "${auth[@]}" "$api/zones?name=$name" | jq -r '.result[0].id // empty')
+            zones=$(cf GET "zones?name=$name") || fail "Cannot list zones (token needs Zone > Zone > Read for $name)."
+            zone=$(jq -r '.[0].id // empty' <<<"$zones")
             [ -z "$zone" ] && name="${name#*.}"
           done
           if [ -z "$zone" ]; then
             echo "::warning::No Cloudflare zone found for $CUSTOM_DOMAIN; create a CNAME $CUSTOM_DOMAIN -> $target yourself."
             exit 0
           fi
-          record=$(curl -sf "${auth[@]}" "$api/zones/$zone/dns_records?name=$CUSTOM_DOMAIN" | jq -r '.result[0].id // empty')
+          records=$(cf GET "zones/$zone/dns_records?name=$CUSTOM_DOMAIN") || fail "Cannot read DNS records (token needs Zone > DNS > Edit)."
+          record=$(jq -r '.[0].id // empty' <<<"$records")
           body="{\"type\":\"CNAME\",\"name\":\"$CUSTOM_DOMAIN\",\"content\":\"$target\",\"proxied\":true,\"comment\":\"ark-explorer (Cloudflare Pages)\"}"
           if [ -n "$record" ]; then
-            curl -sf -X PUT "${auth[@]}" "$api/zones/$zone/dns_records/$record" --data "$body" > /dev/null
+            cf PUT "zones/$zone/dns_records/$record" "$body" > /dev/null || fail "Cannot update the DNS record (token needs Zone > DNS > Edit)."
             echo "Updated DNS record $CUSTOM_DOMAIN -> $target"
           else
-            curl -sf -X POST "${auth[@]}" "$api/zones/$zone/dns_records" --data "$body" > /dev/null
+            cf POST "zones/$zone/dns_records" "$body" > /dev/null || fail "Cannot create the DNS record (token needs Zone > DNS > Edit)."
             echo "Created DNS record $CUSTOM_DOMAIN -> $target"
           fi
 
