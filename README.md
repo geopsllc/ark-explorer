@@ -31,7 +31,7 @@ Live instance: **https://ark.geops.net**
 - **Wallets**: every wallet holding at least 1 ARK, largest first, with rank, share of supply and vote. Each
   wallet page shows balance, vote, public key, second-signature and multisignature details, transaction history (all, sent
   or received), and a voters tab for validators. A wallet page refreshes by itself when a new block touches that wallet.
-- **Search**: by address, validator name, public key, transaction ID, block ID or block height.
+- **Search**: by address, validator name (with suggestions as you type), public key, transaction ID or block ID.
 - Works on phones; dark theme.
 
 ## How "near-live" works

@@ -5,7 +5,6 @@ import { delegateByName, delegateByPk } from "./delegates.svelte";
 export async function search(input: string): Promise<string | null> {
   const q = input.trim();
   if (!q) return null;
-  if (/^\d+$/.test(q)) return `#/block/${q}`;
   if (/^[A-Za-z0-9]{34}$/.test(q)) return `#/wallet/${q}`;
   if (/^0[23][0-9a-fA-F]{64}$/.test(q)) {
     const d = delegateByPk(q.toLowerCase());

@@ -4,6 +4,9 @@
   import { route } from "../lib/router.svelte";
   import { formatInt } from "../lib/format";
   import { search } from "../lib/search";
+  import { chain } from "../lib/chain";
+  import { dir } from "../lib/delegates.svelte";
+  import type { Delegate } from "../lib/types";
 
   let q = $state("");
   let busy = $state(false);
@@ -17,8 +20,58 @@
     { href: "#/wallets", label: "Wallets", match: ["wallets", "wallet"] },
   ];
 
+  // ----- validator name suggestions -----
+  const MAX_SUGGESTIONS = 8;
+  let open = $state(false);
+  let sel = $state(-1);
+  const suggestions = $derived.by(() => {
+    const s = q.trim().toLowerCase();
+    // addresses, public keys and IDs are not names
+    if (!s || s.length > 20) return [] as Delegate[];
+    const exact: Delegate[] = [];
+    const starts: Delegate[] = [];
+    const contains: Delegate[] = [];
+    for (const d of dir.list) {
+      const name = d.username.toLowerCase();
+      if (name === s) exact.push(d);
+      else if (name.startsWith(s)) starts.push(d);
+      else if (name.includes(s)) contains.push(d);
+    }
+    const byRank = (a: Delegate, b: Delegate) => (a.isResigned ? 1 : 0) - (b.isResigned ? 1 : 0) || (a.rank || 1e9) - (b.rank || 1e9);
+    // the exact name first, then names that start with the text, then names that contain it; by rank
+    return [...exact, ...starts.sort(byRank), ...contains.sort(byRank)].slice(0, MAX_SUGGESTIONS);
+  });
+  const showList = $derived(open && suggestions.length > 0);
+  const status = (d: Delegate) => (d.isResigned ? "resigned" : d.rank > 0 && d.rank <= chain.activeDelegates ? "active" : "standby");
+
+  function pick(d: Delegate) {
+    location.hash = `#/wallet/${d.address}`;
+    q = "";
+    open = false;
+    sel = -1;
+    (document.activeElement as HTMLElement | null)?.blur();
+  }
+
+  function keydown(e: KeyboardEvent) {
+    if (!showList) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      sel = (sel + 1) % suggestions.length;
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      sel = sel <= 0 ? suggestions.length - 1 : sel - 1;
+    } else if (e.key === "Escape") {
+      open = false;
+      sel = -1;
+    } else if (e.key === "Enter" && sel >= 0) {
+      e.preventDefault();
+      pick(suggestions[sel]);
+    }
+  }
+
   async function submit(e: Event) {
     e.preventDefault();
+    open = false;
     if (!q.trim() || busy) return;
     busy = true;
     err = "";
@@ -59,12 +112,46 @@
     <form class="search" onsubmit={submit}>
       <input
         class="text"
-        placeholder="Address, validator, tx/block ID or height"
+        placeholder="Address, validator, tx or block ID"
         bind:value={q}
-        oninput={() => (err = "")}
+        oninput={() => {
+          err = "";
+          open = true;
+          sel = -1;
+        }}
+        onfocus={() => (open = true)}
+        onblur={() => (open = false)}
+        onkeydown={keydown}
         aria-label="Search"
+        role="combobox"
+        aria-expanded={showList}
+        aria-controls="search-suggestions"
+        aria-autocomplete="list"
+        autocomplete="off"
+        spellcheck="false"
       />
       {#if err}<span class="err">{err}</span>{/if}
+      {#if showList}
+        <ul class="suggest" id="search-suggestions" role="listbox">
+          {#each suggestions as d, i (d.publicKey)}
+            <li role="option" aria-selected={i === sel}>
+              <!-- mousedown, not click: the input's blur would close the list before a click lands -->
+              <button
+                type="button"
+                class:on={i === sel}
+                onmousedown={(e) => {
+                  e.preventDefault();
+                  pick(d);
+                }}
+                onmouseenter={() => (sel = i)}
+              >
+                <span class="sname">{d.username}</span>
+                <span class="smeta {status(d)}">{d.isResigned ? "resigned" : `#${d.rank} · ${status(d)}`}</span>
+              </button>
+            </li>
+          {/each}
+        </ul>
+      {/if}
     </form>
     <div class="right-side">
       <span class="pill {statusClass}" title={live.error || (live.leader ? "This tab polls the API" : "Another tab polls the API and shares updates")}>
@@ -130,6 +217,54 @@
   }
   .search input {
     width: 100%;
+  }
+  .suggest {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    margin: 0;
+    padding: 4px;
+    list-style: none;
+    background: var(--card);
+    border: 1px solid var(--border-strong);
+    border-radius: 10px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+    z-index: 20;
+  }
+  .suggest button {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 7px 10px;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    cursor: pointer;
+    text-align: left;
+  }
+  .suggest button.on {
+    background: var(--accent-soft);
+  }
+  .sname {
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .smeta {
+    flex: none;
+    font-size: 12px;
+    color: var(--faint);
+    font-variant-numeric: tabular-nums;
+  }
+  .smeta.active {
+    color: var(--green);
+  }
+  .smeta.resigned {
+    color: var(--red);
   }
   .err {
     position: absolute;
