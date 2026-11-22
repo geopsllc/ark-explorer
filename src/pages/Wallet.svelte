@@ -42,7 +42,9 @@
   const wallet = $derived(w.state.data);
   /** an exchange or ARK team wallet from the public known-wallets list */
   const kw = $derived(knownWallet(wallet?.address ?? id));
-  const address = $derived(wallet?.address ?? "");
+  // a plain address needs no lookup first: its transactions load alongside the wallet
+  const address = $derived(wallet?.address ?? (/^A[1-9A-HJ-NP-Za-km-z]{33}$/.test(id) ? id : ""));
+  const cold = $derived(!!(wallet as any)?.cold);
   const del = $derived(wallet?.attributes?.delegate);
   const delegate = $derived(wallet?.publicKey ? delegateByPk(wallet.publicKey) : undefined);
   const votedFor = $derived(wallet?.attributes?.vote ? delegateByPk(wallet.attributes.vote) : undefined);
@@ -54,8 +56,9 @@
   // ----- transactions / voters -----
   let totals = $state<Record<string, number>>({});
   const list = loader(async (signal) => {
-    if (!address || (wallet as any)?.cold) return { txs: [] as Transaction[], voters: [] as Wallet[] };
+    if (!address || cold) return { txs: [] as Transaction[], voters: [] as Wallet[] };
     if (tab === "voters") {
+      if (!wallet?.publicKey) return { txs: [] as Transaction[], voters: [] as Wallet[] };
       const body = await get(`/delegates/${wallet!.publicKey}/voters?page=${page}&limit=${SIZE}&orderBy=balance:desc`, "interactive", signal);
       totals.voters = body.meta?.totalCount ?? 0;
       return { txs: [] as Transaction[], voters: body.data as Wallet[] };
@@ -68,6 +71,8 @@
   $effect(() => {
     void tab;
     void page;
+    void cold;
+    void (tab === "voters" && wallet?.publicKey); // voters need the wallet's public key
     if (address) untrack(() => list.run());
   });
   onDestroy(() => {

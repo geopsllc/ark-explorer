@@ -122,6 +122,18 @@ That's all. Links use hash routes (`/#/block/123`) and every path is relative, w
 - no rewrite rules or SPA fallback are needed
 - it works at a domain root (`https://explorer.example.com/`) or in a sub-folder (`https://example.com/explorer/`)
 
+**Linking from a wallet or another app.** Detail pages answer to both the explorer's own names and ArkScan's:
+
+| Page | Works everywhere | Also works with ArkScan-style names |
+|---|---|---|
+| Transaction | `/#/transaction/<id>` | `/#/transactions/<id>`, `/transactions/<id>` |
+| Wallet | `/#/wallet/<address>` | `/#/addresses/<address>`, `/addresses/<address>` |
+| Block | `/#/block/<id or height>` | `/#/blocks/<id or height>`, `/blocks/<id or height>` |
+
+So an app that links to ArkScan only needs its base URL changed. The forms without `#` need the server to answer
+unknown paths with `index.html` (Cloudflare Pages and Netlify do this by default; in nginx add
+`location / { try_files $uri /index.html; }`); `index.html` then redirects to the hash route before anything loads.
+
 Recommended but optional: serve it over **HTTPS**. Also cache `assets/` for a long time, but not `index.html`. Example nginx block:
 
 ```nginx

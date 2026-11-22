@@ -6,6 +6,14 @@
     <meta name="color-scheme" content="dark" />
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
     <title>ARK Explorer</title>
+    <script>
+      // ArkScan-style links (/transactions/<id>, /addresses/<address>, /blocks/<id>) → hash routes.
+      // Needs a host that serves index.html for unknown paths (Cloudflare Pages, Netlify, nginx try_files).
+      (function () {
+        var m = location.pathname.match(/^(.*?)\/(transactions?|addresses|address|wallets?|blocks?)\/([^\/]+)\/?$/);
+        if (m) location.replace(m[1] + "/#/" + m[2] + "/" + m[3]);
+      })();
+    </script>
   </head>
   <body>
     <div id="app"></div>

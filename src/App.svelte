@@ -33,7 +33,9 @@
     }
   });
 
-  const page = $derived(route.parts[0] ?? "");
+  // ArkScan-style names for detail pages (/transactions/<id>, /addresses/<address>) work too
+  const ALIAS: Record<string, string> = { transactions: "transaction", addresses: "wallet", address: "wallet", wallets: "wallet", blocks: "block" };
+  const page = $derived(route.parts[1] && ALIAS[route.parts[0]] ? ALIAS[route.parts[0]] : (route.parts[0] ?? ""));
 </script>
 
 <Header />
