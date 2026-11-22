@@ -12,8 +12,8 @@ Live instance: **https://ark.geops.net**
 
 ## Features
 
-- **Validators** (ARK's new name for delegates): one live table combining a validator list and a validator monitor. You can sort it **by rank** or
-  **by this round's forging order**. For each validator it shows:
+- **Validators** (ARK's new name for delegates): one live table combining a validator list and a validator monitor. Switch between **Rank View** (by
+  rank) and **Forging View** (this round's forging order). For each validator it shows:
   - this round's status: forged (with the block height), forging now, next, a countdown to its slot, or missed
   - votes and approval %
   - voter count (voters holding at least 1 ARK, the same count ArkScan shows)

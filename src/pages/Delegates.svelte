@@ -131,8 +131,8 @@
       <p>Live forging monitor and validator list for ARK mainnet.</p>
     </div>
     <div class="seg" role="tablist" aria-label="Order">
-      <button class:on={mode === "rank"} onclick={() => (mode = "rank")}>By rank</button>
-      <button class:on={mode === "order"} onclick={() => (mode = "order")}>Forging order</button>
+      <button class:on={mode === "rank"} onclick={() => (mode = "rank")}>Rank View</button>
+      <button class:on={mode === "order"} onclick={() => (mode = "order")}>Forging View</button>
     </div>
   </div>
 
