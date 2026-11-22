@@ -235,7 +235,7 @@ tr.current td {
   background: var(--accent-soft);
 }
 tr.dim td {
-  opacity: 0.55;
+  opacity: 0.8;
 }
 
 /* pills */
