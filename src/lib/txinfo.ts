@@ -6,7 +6,7 @@ export function txTypeName(t: Pick<Transaction, "type" | "typeGroup" | "asset">)
     switch (t.type) {
       case 0: return "Transfer";
       case 1: return "Second signature";
-      case 2: return "Delegate registration";
+      case 2: return "Validator registration";
       case 3: {
         const v: string[] = t.asset?.votes ?? [];
         return v.length === 2 ? "Vote switch" : v[0]?.startsWith("-") ? "Unvote" : "Vote";
@@ -14,7 +14,7 @@ export function txTypeName(t: Pick<Transaction, "type" | "typeGroup" | "asset">)
       case 4: return "Multisignature";
       case 5: return "IPFS";
       case 6: return "Multipayment";
-      case 7: return "Delegate resignation";
+      case 7: return "Validator resignation";
       case 8: return "HTLC lock";
       case 9: return "HTLC claim";
       case 10: return "HTLC refund";

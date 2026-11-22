@@ -12,26 +12,26 @@ Live instance: **https://ark.geops.net**
 
 ## Features
 
-- **Delegates**: one live table combining a delegate list and a delegate monitor. You can sort it **by rank** or
-  **by this round's forging order**. For each delegate it shows:
+- **Validators** (ARK's new name for delegates): one live table combining a validator list and a validator monitor. You can sort it **by rank** or
+  **by this round's forging order**. For each validator it shows:
   - this round's status: forged (with the block height), forging now, next, a countdown to its slot, or missed
   - votes and approval %
   - voter count (voters holding at least 1 ARK, the same count ArkScan shows)
   - blocks produced
   - missed blocks in the last 24 h
-  - forging health: forging, missed last slot, or not forging
+  - forging health: forging, missed last slot, or dead (missed several slots in a row)
   - time since its last block
 
-  Active, standby and resigned delegates are listed separately, and you can filter them by name.
+  Active, standby and resigned validators are listed separately, and you can filter them by name.
 - **Blocks**: a live list of the latest blocks, paging through the whole chain, and a detail page for each block with
   its transactions.
 - **Transactions**: a live list of the latest transactions and a detail page for each one. Detail pages cover all
-  Core v3 types: multipayment recipients, votes with delegate names, memo, signatures and asset data. Transactions
+  Core v3 types: multipayment recipients, votes with validator names, memo, signatures and asset data. Transactions
   still waiting in the pool update by themselves once they are confirmed.
 - **Wallets**: every wallet holding at least 1 ARK, largest first, with rank, share of supply and vote. Each
   wallet page shows balance, vote, public key, second-signature and multisignature details, transaction history (all, sent
-  or received), and a voters tab for delegates. A wallet page refreshes by itself when a new block touches that wallet.
-- **Search**: by address, delegate name, public key, transaction ID, block ID or block height.
+  or received), and a voters tab for validators. A wallet page refreshes by itself when a new block touches that wallet.
+- **Search**: by address, validator name, public key, transaction ID, block ID or block height.
 - Works on phones; dark theme.
 
 ## How "near-live" works
@@ -50,9 +50,9 @@ minute**. These numbers come from load-testing `api.ark.io` (November 2026):
 | Several tabs open in one browser | One visible tab polls and shares new blocks with the others, so extra tabs cost nothing. Hidden tabs stop polling. |
 
 The **forging order** is worked out in the browser exactly the way ARK Core 3.13 does it:
-1. Take the round's delegates, sorted by votes (highest first).
+1. Take the round's validators, sorted by votes (highest first).
 2. Shuffle them, seeded with SHA-256 of the round number.
-3. The delegate for a slot is `order[slot % 51]`.
+3. The validator for a slot is `order[slot % 51]`.
 
 This was checked against a full mainnet round, and all 51 slots matched. Countdowns come from the clock, not the API.
 If the visitor's clock is off, the explorer corrects it using the arrival times of new blocks.
@@ -186,8 +186,8 @@ site is under 50 KB gzipped.
 | `src/lib/api.ts` | Request budget, priorities, timeouts, retries, failover and deep paging |
 | `src/lib/live.svelte.ts` | Slot-aware poller, leader tab election and live state |
 | `src/lib/chain.ts` | Slot and round math and the forging-order shuffle |
-| `src/lib/delegates.svelte.ts` | Delegate directory, voter counts and the missed-block scan |
-| `src/pages/` | Delegates, Blocks, Block, Transactions, Transaction, Wallets and Wallet pages |
+| `src/lib/delegates.svelte.ts` | Validator directory, voter counts and the missed-block scan |
+| `src/pages/` | Validators (`Delegates.svelte`), Blocks, Block, Transactions, Transaction, Wallets and Wallet pages |
 
 ## License
 

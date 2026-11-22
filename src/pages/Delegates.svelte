@@ -113,8 +113,8 @@
 <div class="page">
   <div class="page-head">
     <div>
-      <h1>Delegates</h1>
-      <p>Live forging monitor and delegate list for ARK mainnet.</p>
+      <h1>Validators</h1>
+      <p>Live forging monitor and validator list for ARK mainnet.</p>
     </div>
     <div class="seg" role="tablist" aria-label="Order">
       <button class:on={mode === "rank"} onclick={() => (mode = "rank")}>By rank</button>
@@ -144,14 +144,14 @@
       <div class="health">
         <div title="Forging"><div class="value green">{healthCounts.forging}</div><div class="sub">forging</div></div>
         <div title="Missed their last slot"><div class="value warn">{healthCounts.missed}</div><div class="sub">missed</div></div>
-        <div title="Missed several slots in a row"><div class="value red">{healthCounts["not-forging"]}</div><div class="sub">not forging</div></div>
+        <div title="Missed several slots in a row"><div class="value red">{healthCounts["not-forging"]}</div><div class="sub">dead</div></div>
       </div>
     </div>
     <div class="stat">
       <div class="label">Missed blocks ({missed.windowHours} h)</div>
       <div class="value">{missed.progress > 0 ? formatInt(missed.total) : "…"}</div>
       <div class="sub">
-        {#if missed.ready}{Object.keys(missed.counts).length} delegates{:else}scanning {Math.round(missed.progress * 100)}%{/if}
+        {#if missed.ready}{Object.keys(missed.counts).length} validators{:else}scanning {Math.round(missed.progress * 100)}%{/if}
       </div>
     </div>
     <div class="stat">
@@ -169,20 +169,20 @@
           <button class:on={tab === "standby"} onclick={() => (tab = "standby")}>Standby <span class="faint">{standby.length}</span></button>
           <button class:on={tab === "resigned"} onclick={() => (tab = "resigned")}>Resigned <span class="faint">{resigned.length}</span></button>
         </div>
-        <input class="text" placeholder="Filter by name" bind:value={filter} aria-label="Filter delegates" />
+        <input class="text" placeholder="Filter by name" bind:value={filter} aria-label="Filter validators" />
       {:else}
         <h2>Round {live.round ? formatInt(live.round.number) : ""}</h2>
       {/if}
     </div>
     {#if !dir.loaded}
-      <div class="notice" style="border:0">Loading delegates…</div>
+      <div class="notice" style="border:0">Loading validators…</div>
     {:else}
       <div class="table-wrap">
         <table class="dense">
           <thead>
             <tr>
               <th class="right" title={mode === "order" ? "Position in this round" : "Rank"}>#</th>
-              <th>Delegate</th>
+              <th>Validator</th>
               <th>Round</th>
               {#if mode === "order"}<th class="right c-rank">Rank</th>{/if}
               <th class="right c-votes" title="Votes ({TOKEN})">Votes</th>
@@ -205,7 +205,7 @@
                 <td class="num faint right">{pos || "–"}</td>
                 <td>
                   <span class="name">
-                    {#if h}<span class="hdot {h}" title={h === "forging" ? "Forging" : h === "missed" ? "Missed last slot" : "Not forging"}></span>{/if}
+                    {#if h}<span class="hdot {h}" title={h === "forging" ? "Forging" : h === "missed" ? "Missed last slot" : "Dead: missed several slots in a row"}></span>{/if}
                     <a class="trunc" href="#/wallet/{d.address}" title={d.username}>{d.username}</a>
                   </span>
                 </td>
@@ -237,7 +237,7 @@
                 </td>
               </tr>
             {:else}
-              <tr><td colspan="10" class="muted">{mode === "order" ? "Loading the round…" : "No delegates match."}</td></tr>
+              <tr><td colspan="10" class="muted">{mode === "order" ? "Loading the round…" : "No validators match."}</td></tr>
             {/each}
           </tbody>
         </table>

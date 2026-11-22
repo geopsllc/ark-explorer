@@ -39,7 +39,7 @@
   <div class="page"><div class="notice error">Could not reach the ARK API ({PRIMARY_API}): {live.error}. Retrying…</div></div>
 {:else if ready}
   {#key route.parts.join("/")}
-    {#if page === "" || page === "delegates"}
+    {#if page === "" || page === "validators" || page === "delegates"}
       <Delegates />
     {:else if page === "blocks"}
       <Blocks />
@@ -54,7 +54,7 @@
     {:else if page === "wallet" && route.parts[1]}
       <WalletPage id={route.parts[1]} />
     {:else}
-      <div class="page"><div class="notice">Page not found. <a href="#/">Go to delegates</a></div></div>
+      <div class="page"><div class="notice">Page not found. <a href="#/">Go to validators</a></div></div>
     {/if}
   {/key}
 {/if}

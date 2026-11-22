@@ -11,7 +11,7 @@
 
   const page = $derived(route.parts[0] ?? "");
   const nav = [
-    { href: "#/", label: "Delegates", match: ["", "delegates"] },
+    { href: "#/", label: "Validators", match: ["", "validators", "delegates"] },
     { href: "#/blocks", label: "Blocks", match: ["blocks", "block"] },
     { href: "#/transactions", label: "Transactions", match: ["transactions", "transaction"] },
     { href: "#/wallets", label: "Wallets", match: ["wallets", "wallet"] },
@@ -59,7 +59,7 @@
     <form class="search" onsubmit={submit}>
       <input
         class="text"
-        placeholder="Address, delegate, tx/block ID or height"
+        placeholder="Address, validator, tx/block ID or height"
         bind:value={q}
         oninput={() => (err = "")}
         aria-label="Search"

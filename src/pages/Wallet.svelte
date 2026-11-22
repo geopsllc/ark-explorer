@@ -102,16 +102,16 @@
     </div>
     {#if del}
       <div>
-        {#if del.resigned || delegate?.isResigned}<span class="pill red">Resigned delegate</span>
+        {#if del.resigned || delegate?.isResigned}<span class="pill red">Resigned validator</span>
         {:else if isActive}
-          <span class="pill green">Active delegate · rank {delegate?.rank}</span>
-        {:else}<span class="pill">Standby delegate · rank {delegate?.rank ?? del.rank ?? "–"}</span>{/if}
+          <span class="pill green">Active validator · rank {delegate?.rank}</span>
+        {:else}<span class="pill">Standby validator · rank {delegate?.rank ?? del.rank ?? "–"}</span>{/if}
       </div>
     {/if}
   </div>
 
   {#if w.state.error}
-    <div class="notice" class:error={w.state.error !== "Not found"}>{w.state.error === "Not found" ? "No wallet or delegate found." : w.state.error}</div>
+    <div class="notice" class:error={w.state.error !== "Not found"}>{w.state.error === "Not found" ? "No wallet or validator found." : w.state.error}</div>
   {:else if !wallet}
     <div class="notice">Loading…</div>
   {:else}
@@ -159,7 +159,7 @@
             <div class="label">Missed ({missed.windowHours} h)</div>
             <div class="value" class:warn={(missed.counts[wallet.publicKey ?? ""] ?? 0) > 0}>{missed.counts[wallet.publicKey ?? ""] ?? 0}</div>
             <div class="sub">
-              {#if healthMissed === 0}<span class="green">forging</span>{:else if healthMissed === 1}<span class="warn">missed last slot</span>{:else}<span class="red">not forging</span>{/if}
+              {#if healthMissed === 0}<span class="green">forging</span>{:else if healthMissed === 1}<span class="warn">missed last slot</span>{:else}<span class="red">dead</span>{/if}
               {#if !missed.ready} · scanning {Math.round(missed.progress * 100)}%{/if}
             </div>
           </div>
