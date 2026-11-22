@@ -28,7 +28,8 @@ Live instance: **https://ark.geops.net**
 - **Transactions**: a live list of the latest transactions and a detail page for each one. Detail pages cover all
   Core v3 types: multipayment recipients, votes with delegate names, memo, signatures and asset data. Transactions
   still waiting in the pool update by themselves once they are confirmed.
-- **Wallets**: balance, vote, public key, second-signature and multisignature details, transaction history (all, sent
+- **Wallets**: every wallet holding at least 1 ARK, largest first, with rank, share of supply and vote. Each
+  wallet page shows balance, vote, public key, second-signature and multisignature details, transaction history (all, sent
   or received), and a voters tab for delegates. A wallet page refreshes by itself when a new block touches that wallet.
 - **Search**: by address, delegate name, public key, transaction ID, block ID or block height.
 - Works on phones; dark theme.
@@ -186,7 +187,7 @@ site is under 50 KB gzipped.
 | `src/lib/live.svelte.ts` | Slot-aware poller, leader tab election and live state |
 | `src/lib/chain.ts` | Slot and round math and the forging-order shuffle |
 | `src/lib/delegates.svelte.ts` | Delegate directory, voter counts and the missed-block scan |
-| `src/pages/` | Delegates, Blocks, Block, Transactions, Transaction and Wallet pages |
+| `src/pages/` | Delegates, Blocks, Block, Transactions, Transaction, Wallets and Wallet pages |
 
 ## License
 

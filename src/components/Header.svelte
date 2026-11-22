@@ -14,6 +14,7 @@
     { href: "#/", label: "Delegates", match: ["", "delegates"] },
     { href: "#/blocks", label: "Blocks", match: ["blocks", "block"] },
     { href: "#/transactions", label: "Transactions", match: ["transactions", "transaction"] },
+    { href: "#/wallets", label: "Wallets", match: ["wallets", "wallet"] },
   ];
 
   async function submit(e: Event) {
@@ -155,6 +156,14 @@
     .search {
       order: 10;
       flex-basis: 100%;
+    }
+  }
+  @media (max-width: 420px) {
+    nav {
+      gap: 0;
+    }
+    nav a {
+      padding: 6px 8px;
     }
   }
 </style>
