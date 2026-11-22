@@ -10,6 +10,7 @@
  *
  * Verified against mainnet: 51/51 blocks of a full round matched.
  */
+import type { Priority } from "./api";
 import { get } from "./api";
 import { sha256 } from "./sha256";
 import { load, save } from "./storage";
@@ -49,7 +50,7 @@ const orderCache = new Map<number, Promise<string[]>>();
  * Forging order of `round`: index i forges the slots where slot % activeDelegates === i.
  * Immutable once the round exists, so it is cached (memory + localStorage for the last 120 rounds).
  */
-export function roundOrder(round: number, priority: "interactive" | "live" | "background" = "interactive"): Promise<string[]> {
+export function roundOrder(round: number, priority: Priority = "interactive"): Promise<string[]> {
   const hit = orderCache.get(round);
   if (hit) return hit;
   const storeKey = `${STORE}:orders`;

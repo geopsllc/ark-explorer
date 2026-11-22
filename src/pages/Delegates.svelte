@@ -4,6 +4,7 @@
   import { live } from "../lib/live.svelte";
   import { dir, missed, missedSinceLastBlock, wantVoters } from "../lib/delegates.svelte";
   import { ago, agoShort, arkCompact, countdown, formatInt } from "../lib/format";
+  import { untrack } from "svelte";
   import { load, save } from "../lib/storage";
   import type { Delegate } from "../lib/types";
 
@@ -14,7 +15,7 @@
   let tab = $state<Tab>("active");
   let filter = $state("");
   let page = $state(1);
-  const PAGE = 100;
+  const PAGE = 50;
 
   $effect(() => save("ark-explorer:delegates-mode", mode));
 
@@ -103,8 +104,20 @@
   });
   $effect(() => {
     const pks = visible.map((r) => r.d.publicKey);
-    const t = setTimeout(() => wantVoters(pks), 600);
+    const t = setTimeout(() => wantVoters(pks), 200);
     return () => clearTimeout(t);
+  });
+
+  // A new round reorders every row. Browsers keep the row under your eye in view ("scroll
+  // anchoring") and drag the page along with it, so in forging order anchoring is off for the table
+  // and the page jumps back to the top instead, where the new round begins.
+  let shownRound = 0;
+  $effect(() => {
+    const r = live.round?.number ?? 0;
+    if (r && shownRound && r !== shownRound && untrack(() => mode) === "order" && window.scrollY > 0) {
+      window.scrollTo(0, 0);
+    }
+    if (r) shownRound = r;
   });
 
   const pct = (d: Delegate) => `${(d.production?.approval ?? 0).toFixed(2)}%`;
@@ -177,13 +190,13 @@
     {#if !dir.loaded}
       <div class="notice" style="border:0">Loading validators…</div>
     {:else}
-      <div class="table-wrap">
+      <div class="table-wrap" class:no-anchor={mode === "order"}>
         <table class="dense">
           <thead>
             <tr>
               <th class="right" title={mode === "order" ? "Position in this round" : "Rank"}>#</th>
               <th>Validator</th>
-              <th>Round</th>
+              <th class="c-round">Round</th>
               {#if mode === "order"}<th class="right c-rank">Rank</th>{/if}
               <th class="right c-votes" title="Votes ({TOKEN})">Votes</th>
               <th class="right c-pct">%</th>
@@ -213,15 +226,15 @@
                   {#if !st}
                     <span class="faint">–</span>
                   {:else if st.kind === "forged"}
-                    <a class="pill green" href="#/block/{st.height}" title="Forged block #{formatInt(st.height)}">{formatInt(st.height)}</a>
+                    <a class="pill rp green" href="#/block/{st.height}" title="Forged block #{formatInt(st.height)}">{formatInt(st.height)}</a>
                   {:else if st.kind === "forging"}
-                    <span class="pill accent" title="Forging now"><span class="dot pulse"></span>Now</span>
+                    <span class="pill rp accent" title="Forging now"><span class="dot pulse"></span>Now</span>
                   {:else if st.kind === "late"}
-                    <span class="pill warn" title="Slot passed, block not seen yet"><span class="dot pulse"></span>Late</span>
+                    <span class="pill rp warn" title="Slot passed, block not seen yet"><span class="dot pulse"></span>Late</span>
                   {:else if st.kind === "missed"}
-                    <span class="pill red">Missed</span>
+                    <span class="pill rp red">Missed</span>
                   {:else}
-                    <span class="pill" class:accent={st.next} title={st.next ? "Forges next" : "Time until its slot"}>{countdown(st.eta)}</span>
+                    <span class="pill rp" class:accent={st.next} title={st.next ? "Forges next" : "Time until its slot"}>{countdown(st.eta)}</span>
                   {/if}
                 </td>
                 {#if mode === "order"}<td class="num muted right c-rank">{d.rank}</td>{/if}
@@ -255,6 +268,15 @@
 
 <style>
   /* each count sits above its own label */
+  /* Every round pill is as wide as a block height, so the column does not resize as countdowns
+     turn into forged heights during the round. */
+  .no-anchor {
+    overflow-anchor: none;
+  }
+  .rp {
+    justify-content: center;
+    min-width: calc(10ch + 18px);
+  }
   .health {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));

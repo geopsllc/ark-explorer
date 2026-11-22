@@ -18,12 +18,13 @@
  * - interactive (what the user is looking at): 10 s timeout, 500 retried after 0.3 s and 1 s,
  *   network errors after 0.5 s and 1.5 s, 4xx never.
  * - live (block poller): 3 s timeout, no retries: the next poll is at most ~0.5 s away.
- * - background (directory, voter counts, missed-block scan): 8 s timeout, no retries; the
- *   scheduler pauses it first when the budget runs low.
+ * - background (directory, voter counts): 8 s timeout, no retries; paused when the budget runs low.
+ * - bulk (the 24 h missed-block scan, ~108 requests): like background but with a smaller share, so a
+ *   first visit's scan cannot hold up the voter counts and directory pages on screen.
  */
 import { PRIMARY_API, REQUEST_BUDGET } from "./site";
 
-export type Priority = "interactive" | "live" | "background";
+export type Priority = "interactive" | "live" | "background" | "bulk";
 
 export class ApiError extends Error {
   constructor(message: string, public status?: number) {
@@ -37,14 +38,15 @@ export class RateLimitError extends ApiError {
   }
 }
 
-const TIMEOUT: Record<Priority, number> = { interactive: 10_000, live: 3_000, background: 8_000 };
+const TIMEOUT: Record<Priority, number> = { interactive: 10_000, live: 3_000, background: 8_000, bulk: 8_000 };
 const RETRY: Record<Priority, { server: number[]; network: number[] }> = {
   interactive: { server: [300, 1000], network: [500, 1500] },
   live: { server: [], network: [] },
   background: { server: [], network: [] },
+  bulk: { server: [], network: [] },
 };
 /** Share of the per-minute budget each priority may use (the rest stays free for higher ones). */
-const SHARE: Record<Priority, number> = { interactive: 1, live: 0.9, background: 0.6 };
+const SHARE: Record<Priority, number> = { interactive: 1, live: 0.9, background: 0.75, bulk: 0.35 };
 /** Longest wait for budget that is absorbed silently instead of reported. */
 const MAX_SILENT_WAIT_MS = 3000;
 const WINDOW_MS = 60_000;

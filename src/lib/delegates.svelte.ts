@@ -5,8 +5,9 @@
  * - Directory: ~14 pages of 100. Page 1 (ranks 1-100) is loaded first and refreshed once per
  *   round; the rest load in the background and refresh every 30 min. Produced blocks and last
  *   block are updated locally from live blocks, so they are exact between refreshes.
- * - Voter counts (voters with >= 1 ARK): one `/delegates/{pk}/voters?limit=1&balance.from=1e8` each, only for delegates on screen, in the
- *   background, cached for 30 min.
+ * - Voter counts (voters with >= 1 ARK): the API has no bulk form, so it is one
+ *   `/delegates/{pk}/voters?limit=1&balance.from=1e8` per delegate on screen, 6 at a time, in screen
+ *   order, cached for 30 min (51 counts take a few seconds).
  * - Missed blocks: the API has no missed-block data, so it is derived from block timestamps: a
  *   gap between two consecutive blocks means the slots in between were missed, and the forging
  *   order says by whom. The last MISSED_WINDOW_HOURS (24) are scanned once, 100 blocks per request
@@ -135,6 +136,17 @@ let votersQueue: string[] = [];
 let votersRunning = false;
 let votersAt = 0;
 /** Fetch voter counts for these delegates in the background (only ones not cached). */
+const VOTER_WORKERS = 6;
+let saveTimer: ReturnType<typeof setTimeout> | null = null;
+/** Persist the counts at most every 500 ms while they stream in. */
+function saveVoters() {
+  if (saveTimer) return;
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    save(votersKey(), { at: votersAt, counts: $state.snapshot(dir.voters) });
+  }, 500);
+}
+
 export function wantVoters(pks: string[]) {
   if (Date.now() - votersAt > VOTERS_TTL && votersAt) {
     dir.voters = {};
@@ -143,7 +155,7 @@ export function wantVoters(pks: string[]) {
   votersQueue = pks.filter((pk) => dir.voters[pk] === undefined);
   if (votersRunning) return;
   votersRunning = true;
-  (async () => {
+  const worker = async () => {
     while (votersQueue.length) {
       const pk = votersQueue.shift()!;
       if (dir.voters[pk] !== undefined) continue;
@@ -152,13 +164,14 @@ export function wantVoters(pks: string[]) {
         const body = await get(`/delegates/${pk}/voters?limit=1&balance.from=100000000`, "background");
         dir.voters[pk] = body.meta?.totalCount ?? 0;
         if (!votersAt) votersAt = Date.now();
-        save(votersKey(), { at: votersAt, counts: $state.snapshot(dir.voters) });
+        saveVoters();
       } catch {
         await new Promise((r) => setTimeout(r, 2000));
       }
     }
-    votersRunning = false;
-  })();
+  };
+  // a few at a time: 51 counts in a few seconds instead of ~20 s one by one
+  Promise.all(Array.from({ length: VOTER_WORKERS }, worker)).finally(() => (votersRunning = false));
 }
 
 // ---------- missed blocks ----------
@@ -194,7 +207,7 @@ const windowSlots = () => Math.round((MISSED_WINDOW_HOURS * 3600) / chain.blockt
 
 async function gapEvents(a: { height: number; slot: number }, b: { height: number; slot: number }): Promise<MissedEvent[]> {
   if (b.slot - a.slot <= 1) return [];
-  const order = await roundOrder(roundOf(b.height), "background");
+  const order = await roundOrder(roundOf(b.height), "bulk");
   const out: MissedEvent[] = [];
   for (let s = Math.max(a.slot + 1, b.slot - MAX_GAP); s < b.slot; s++) {
     out.push({ slot: s, height: b.height, pk: order[s % chain.activeDelegates] });
@@ -233,7 +246,7 @@ function recount() {
 const toPoint = (b: Block) => ({ height: b.height, slot: slotOf(b.timestamp.epoch) });
 
 async function rangeAsc(from: number, to: number) {
-  const body = await get(`/blocks?height.from=${from}&height.to=${to}&orderBy=height:asc&limit=100`, "background");
+  const body = await get(`/blocks?height.from=${from}&height.to=${to}&orderBy=height:asc&limit=100`, "bulk");
   return (body.data as Block[]).map(toPoint);
 }
 
