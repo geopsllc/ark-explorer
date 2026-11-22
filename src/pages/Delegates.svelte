@@ -141,12 +141,11 @@
     </div>
     <div class="stat">
       <div class="label">Forging status</div>
-      <div class="value health">
-        <span class="green" title="Forging">{healthCounts.forging}</span>
-        <span class="warn" title="Missed their last slot">{healthCounts.missed}</span>
-        <span class="red" title="Missed several slots in a row">{healthCounts["not-forging"]}</span>
+      <div class="health">
+        <div title="Forging"><div class="value green">{healthCounts.forging}</div><div class="sub">forging</div></div>
+        <div title="Missed their last slot"><div class="value warn">{healthCounts.missed}</div><div class="sub">missed</div></div>
+        <div title="Missed several slots in a row"><div class="value red">{healthCounts["not-forging"]}</div><div class="sub">not forging</div></div>
       </div>
-      <div class="sub">forging · missed · not forging</div>
     </div>
     <div class="stat">
       <div class="label">Missed blocks ({missed.windowHours} h)</div>
@@ -255,9 +254,14 @@
 </div>
 
 <style>
+  /* each count sits above its own label */
   .health {
-    display: flex;
-    gap: 14px;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    column-gap: 10px;
+  }
+  .health .sub {
+    line-height: 1.25;
   }
   .name {
     display: inline-flex;
@@ -302,6 +306,9 @@
   }
   .name .trunc {
     --trunc: 170px;
+    font-size: 15px;
+    font-weight: 500;
+    line-height: 1.35;
   }
   @media (max-width: 659px) {
     .name .trunc {
