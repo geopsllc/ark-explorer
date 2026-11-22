@@ -50,6 +50,9 @@ export const live = $state({
   now: Date.now(),
   clockOffset: 0,
   lastSuccess: 0,
+  /** total supply in arktoshi, as of supplyHeight; kept current by adding each new block's reward */
+  supply: null as bigint | null,
+  supplyHeight: 0,
 });
 
 type Listener = (blocks: Block[], txs: Transaction[]) => void;
@@ -103,6 +106,14 @@ function applyBlocks(blocks: Block[], txs: Transaction[], notify = true) {
   const newer = blocks.filter((b) => b.height > tipHeight);
   if (!newer.length) return;
   live.tip = newer[newer.length - 1];
+  if (live.supply !== null) {
+    for (const b of newer) {
+      if (b.height > live.supplyHeight) {
+        live.supply += BigInt(b.forged.reward);
+        live.supplyHeight = b.height;
+      }
+    }
+  }
   live.blocks = [...newer.slice().reverse(), ...live.blocks].slice(0, KEEP_BLOCKS);
   const ids = new Set(newer.map((b) => b.id));
   const newTxs = txs.filter((t) => ids.has(t.blockId)).sort((a, b) => (b.height ?? 0) - (a.height ?? 0));
@@ -170,6 +181,10 @@ async function syncRound(): Promise<void> {
 async function resync(priority: "interactive" | "live" = "interactive") {
   const body = await get("/blockchain", priority);
   const h: number = body.data.block.height;
+  if (body.data.supply) {
+    live.supply = BigInt(body.data.supply);
+    live.supplyHeight = h;
+  }
   const blocks = (await get(`/blocks?height.from=${Math.max(1, h - KEEP_BLOCKS + 1)}&height.to=${h}&orderBy=height:asc&limit=100`, priority)).data as Block[];
   live.tip = null;
   live.blocks = [];

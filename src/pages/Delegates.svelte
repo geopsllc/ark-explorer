@@ -127,6 +127,9 @@
       <h1>Validators</h1>
       <p>Live forging monitor</p>
     </div>
+    {#if live.supply !== null}
+      <span class="pill supply" title="Total supply, updated with every block">Supply <b class="num">{arkCompact(live.supply)}<Sym /></b></span>
+    {/if}
     <div class="seg" role="tablist" aria-label="Order">
       <button class:on={mode === "rank"} onclick={() => (mode = "rank")}>Rank View</button>
       <button class:on={mode === "order"} onclick={() => (mode = "order")}>Forging View</button>
@@ -265,6 +268,13 @@
 </div>
 
 <style>
+  .supply {
+    font-size: 13px;
+  }
+  .supply b {
+    color: var(--text);
+    font-weight: 600;
+  }
   /* each count sits above its own label */
   /* Every round pill is as wide as a block height, so the column does not resize as countdowns
      turn into forged heights during the round. */
