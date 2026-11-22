@@ -158,30 +158,6 @@ npm run build      # production build into dist/
 npm run preview    # serve dist/ on http://localhost:1431
 ```
 
-### Deploy to Cloudflare Pages with GitHub Actions
-
-[`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) builds every push and pull request. On `ark-mainnet` it
-also deploys to Cloudflare Pages and attaches a custom domain. To use it on your fork:
-
-1. Create a Cloudflare API token with these permissions:
-   - **Account › Cloudflare Pages › Edit**
-   - **Zone › DNS › Edit** for the zone your domain is in
-2. In the GitHub repository, go to **Settings → Secrets and variables → Actions** and add two secrets:
-   - `CLOUDFLARE_API_TOKEN`
-   - `CLOUDFLARE_ACCOUNT_ID`: found on the Cloudflare dashboard, in the sidebar of Workers & Pages
-3. Under **Variables** in the same place, optionally set:
-   - `PAGES_PROJECT`: the Pages project name, default `ark-explorer`
-   - `CUSTOM_DOMAIN`: your domain, default `ark.geops.net`; set it to `none` to keep just the `*.pages.dev` address
-4. Push to `ark-mainnet`, or run the workflow from the Actions tab.
-
-The workflow then:
-- creates the Pages project if it doesn't exist
-- uploads `dist/`
-- attaches the domain to the project
-- creates or updates a proxied `CNAME` for the domain, pointing at the project's `pages.dev` name
-
-Without the secrets, the build still runs and the deploy is skipped.
-
 ## Tech
 
 [Svelte 5](https://svelte.dev) + TypeScript + [Vite](https://vite.dev). There are no runtime dependencies; the built
