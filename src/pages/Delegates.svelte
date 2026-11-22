@@ -176,7 +176,7 @@
   </div>
 
   <div class="card">
-    <div class="card-head">
+    <div class="card-head" class:tight={mode === "rank"}>
       {#if mode === "rank"}
         <div class="seg">
           <button class:on={tab === "active"} onclick={() => (tab = "active")}>Active <span class="faint">{active.length}</span></button>
@@ -268,6 +268,11 @@
 </div>
 
 <style>
+  /* the tabs and filter fit in the same 52 px as the Forging View title */
+  .card-head.tight {
+    padding-top: 6.5px;
+    padding-bottom: 6.5px;
+  }
   .supply {
     font-size: 13px;
   }
