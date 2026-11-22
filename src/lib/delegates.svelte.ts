@@ -203,6 +203,8 @@ export const missed = $state({
   /** latest missed slot per delegate */
   lastMissed: {} as Record<string, number>,
   total: 0,
+  /** the scan reaches the tip: health dots are only shown while this holds */
+  current: false,
 });
 
 const scanKey = () => `${STORE}:missed`;
@@ -250,17 +252,101 @@ function recount() {
   missed.progress = Math.min(1, span / windowSlots());
   if (scan.loSlot <= from) missed.progress = 1;
   missed.ready = missed.progress >= 1;
+  missed.current = !!live.tip && live.tip.height - scan.hi <= 2;
   save(scanKey(), scan);
 }
 
 const toPoint = (b: Block) => ({ height: b.height, slot: slotOf(b.timestamp.epoch) });
 
-async function rangeAsc(from: number, to: number) {
-  const body = await get(`/blocks?height.from=${from}&height.to=${to}&orderBy=height:asc&limit=100`, "bulk");
+async function rangeAsc(from: number, to: number, priority: "bulk" | "background" = "bulk") {
+  const body = await get(`/blocks?height.from=${from}&height.to=${to}&orderBy=height:asc&limit=100`, priority);
   return (body.data as Block[]).map(toPoint);
 }
 
 let scanning = false;
+// Every change to the scan runs through this queue, one at a time: live blocks, catch-up after a
+// gap and the backward fill all move scan.hi / scan.lo, so they must never interleave.
+let queue: Promise<unknown> = Promise.resolve();
+const enqueue = (fn: () => Promise<void>) => (queue = queue.then(fn).catch(() => {}));
+
+/** Fresh scan of the latest 100 blocks (first visit, or after a gap too long to fill). */
+async function freshScan(): Promise<boolean> {
+  const tip = live.tip;
+  if (!tip) return false;
+  const pts = await rangeAsc(Math.max(1, tip.height - 99), tip.height, "background");
+  if (!pts.length) return false;
+  scan = { lo: pts[0].height, loSlot: pts[0].slot, hi: pts.at(-1)!.height, hiSlot: pts.at(-1)!.slot, events: await eventsIn(pts) };
+  recount();
+  return true;
+}
+
+/** Append blocks above scan.hi, if they continue it without a gap. */
+async function extend(points: { height: number; slot: number }[]): Promise<boolean> {
+  if (!scan) return false;
+  const pts = points.filter((p) => p.height > scan!.hi);
+  if (!pts.length) return true;
+  if (pts[0].height !== scan.hi + 1) return false;
+  scan.events.push(...(await eventsIn([{ height: scan.hi, slot: scan.hiSlot }, ...pts])));
+  scan.hi = pts.at(-1)!.height;
+  scan.hiSlot = pts.at(-1)!.slot;
+  recount();
+  return true;
+}
+
+/**
+ * Bring the scan up to the tip. Runs on start and after ANY gap: a hidden tab or a sleeping laptop
+ * reloads the recent blocks without announcing them, and a follower tab may miss messages.
+ */
+async function catchUp(): Promise<void> {
+  for (let tries = 0; scan && live.tip && scan.hi < live.tip.height && tries < 50; ) {
+    // too far behind to fill (more than the window): start over from the tip
+    if (live.tip.height - scan.hi > windowSlots()) {
+      if (!(await freshScan())) return;
+      fillBack();
+      continue;
+    }
+    try {
+      const pts = await rangeAsc(scan.hi + 1, Math.min(scan.hi + 100, live.tip.height), "background");
+      if (!pts.length || !(await extend(pts))) tries++;
+    } catch {
+      tries++;
+      await new Promise((r) => setTimeout(r, 5000));
+    }
+  }
+}
+
+/** Fill backward down to the start of the window (bulk priority, paused while hidden). */
+let filling = false;
+async function fillBack() {
+  if (filling) return;
+  filling = true;
+  try {
+    while (scan && scan.lo > 1 && scan.loSlot > slotAt(nowMs()) - windowSlots()) {
+      if (document.hidden) {
+        await new Promise((r) => setTimeout(r, 3000));
+        continue;
+      }
+      try {
+        const lo = scan.lo;
+        const pts = await rangeAsc(Math.max(1, lo - 100), lo - 1);
+        if (!pts.length) break;
+        await enqueue(async () => {
+          if (!scan || scan.lo !== lo) return; // the scan was restarted meanwhile
+          scan.events.push(...(await eventsIn([...pts, { height: scan.lo, slot: scan.loSlot }])));
+          scan.lo = pts[0].height;
+          scan.loSlot = pts[0].slot;
+          recount();
+        });
+      } catch {
+        await new Promise((r) => setTimeout(r, 5000));
+      }
+    }
+  } finally {
+    filling = false;
+    recount();
+  }
+}
+
 export async function startMissedScan() {
   missed.windowHours = MISSED_WINDOW_HOURS;
   const tip = live.tip;
@@ -268,63 +354,47 @@ export async function startMissedScan() {
   scanning = true;
   scan = load<ScanState>(scanKey());
   // stale or broken cache: start over
-  if (!scan || scan.hi > tip.height || tip.height - scan.hi > windowSlots() * 2) scan = null;
-  if (!scan) {
-    const pts = await rangeAsc(Math.max(1, tip.height - 99), tip.height).catch(() => []);
-    if (!pts.length) {
-      scanning = false;
-      return;
-    }
-    scan = { lo: pts[0].height, loSlot: pts[0].slot, hi: pts.at(-1)!.height, hiSlot: pts.at(-1)!.slot, events: await eventsIn(pts) };
-  }
-  recount();
-
-  // live blocks extend the top
-  onNewBlocks(async (blocks) => {
-    if (!scan) return;
-    const pts = blocks.map(toPoint).filter((p) => p.height > scan!.hi);
-    if (!pts.length || pts[0].height !== scan.hi + 1) return; // gap: the forward scan below fills it
-    const ev = await eventsIn([{ height: scan.hi, slot: scan.hiSlot }, ...pts]);
-    scan.events.push(...ev);
-    scan.hi = pts.at(-1)!.height;
-    scan.hiSlot = pts.at(-1)!.slot;
+  if (!scan || scan.hi > tip.height || tip.height - scan.hi > windowSlots()) scan = null;
+  await enqueue(async () => {
+    if (!scan && !(await freshScan())) return;
     recount();
+    await catchUp();
   });
-
-  // forward: from the cached top up to the tip
-  while (live.tip && scan.hi < live.tip.height - 1) {
-    try {
-      const pts = await rangeAsc(scan.hi + 1, Math.min(scan.hi + 100, live.tip.height));
-      if (!pts.length || pts[0].height !== scan.hi + 1) break;
-      scan.events.push(...(await eventsIn([{ height: scan.hi, slot: scan.hiSlot }, ...pts])));
-      scan.hi = pts.at(-1)!.height;
-      scan.hiSlot = pts.at(-1)!.slot;
-      recount();
-    } catch {
-      await new Promise((r) => setTimeout(r, 5000));
-    }
+  if (!scan) {
+    scanning = false; // the API failed: try again shortly
+    setTimeout(() => startMissedScan(), 10_000);
+    return;
   }
 
-  // backward: down to the start of the window
-  while (scan.lo > 1 && scan.loSlot > slotAt(nowMs()) - windowSlots()) {
-    if (document.hidden) {
-      await new Promise((r) => setTimeout(r, 3000));
-      continue;
-    }
-    try {
-      const from = Math.max(1, scan.lo - 100);
-      const pts = await rangeAsc(from, scan.lo - 1);
-      if (!pts.length) break;
-      scan.events.push(...(await eventsIn([...pts, { height: scan.lo, slot: scan.loSlot }])));
-      scan.lo = pts[0].height;
-      scan.loSlot = pts[0].slot;
-      recount();
-    } catch {
-      await new Promise((r) => setTimeout(r, 5000));
-    }
+  // live blocks extend the top; a gap (or a resync that skipped announcing blocks) is filled first
+  onNewBlocks((blocks) => {
+    const pts = blocks.map(toPoint);
+    void enqueue(async () => {
+      if (!(await extend(pts))) {
+        missed.current = false;
+        await catchUp();
+      }
+    });
+  });
+  // safety net: resyncs replace the recent window silently, so check for a gap regularly too
+  setInterval(() => {
+    recount(); // also lets old events fall out of the window
+    if (scan && live.tip && live.tip.height - scan.hi > 2 && !document.hidden) void enqueue(catchUp);
+  }, 30_000);
+
+  fillBack();
+
+  // dev only (stripped from builds): leave the scan N blocks behind, like a resync that announced
+  // nothing, to test that it recovers on its own
+  if (import.meta.env.DEV) {
+    (window as any).__rewindMissedScan = (n: number) =>
+      enqueue(async () => {
+        if (!scan) return;
+        scan.hi -= n;
+        scan.hiSlot -= n;
+        scan.events = scan.events.filter((e) => e.height <= scan!.hi);
+      });
   }
-  recount();
-  setInterval(recount, 60_000); // let old events fall out of the window
 }
 
 /** Missed turns since the delegate's last forged block (its current streak), oldest first. */
@@ -342,6 +412,9 @@ export function missedSinceLastBlock(d: Delegate): number {
 }
 
 /** Forging health; the rule (and why) is in roundview.ts. */
-export function forgingHealth(d: Delegate): "forging" | "missed" | "not-forging" {
+export type Health = "forging" | "missed" | "not-forging" | "unknown";
+export function forgingHealth(d: Delegate): Health {
+  // until the scan covers the latest blocks, "no misses seen" would just mean "not looked yet"
+  if (!missed.current) return "unknown";
   return healthFromStreak(missStreak(d), chain.activeDelegates);
 }

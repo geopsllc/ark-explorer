@@ -170,7 +170,7 @@
             <div class="label">Missed ({missed.windowHours} h)</div>
             <div class="value" class:warn={(missed.counts[wallet.publicKey ?? ""] ?? 0) > 0}>{missed.counts[wallet.publicKey ?? ""] ?? 0}</div>
             <div class="sub">
-              {#if healthState === "forging"}<span class="green">forging</span>{:else if healthState === "missed"}<span class="warn">missed {healthMissed > 1 ? `last ${healthMissed} turns` : "last turn"}</span>{:else}<span class="red">dead</span> <span class="faint">({healthMissed} missed turns in a row)</span>{/if}
+              {#if healthState === "unknown"}<span class="faint">checking recent blocks…</span>{:else if healthState === "forging"}<span class="green">forging</span>{:else if healthState === "missed"}<span class="warn">missed {healthMissed > 1 ? `last ${healthMissed} turns` : "last turn"}</span>{:else}<span class="red">dead</span> <span class="faint">({healthMissed} missed turns in a row)</span>{/if}
               {#if !missed.ready} · scanning {Math.round(missed.progress * 100)}%{/if}
             </div>
           </div>

@@ -42,10 +42,15 @@
 
   // ----- forging health (from missed-slot history) -----
   const health = (d: Delegate) => forgingHealth(d);
+  /** null until the missed-slot scan reaches the latest block */
   const healthCounts = $derived.by(() => {
     void missed.lastMissed;
+    if (!missed.current) return null;
     const c = { forging: 0, missed: 0, "not-forging": 0 };
-    for (const d of active) c[health(d)]++;
+    for (const d of active) {
+      const h = health(d);
+      if (h !== "unknown") c[h]++;
+    }
     return c;
   });
 
@@ -127,9 +132,9 @@
     <div class="stat">
       <div class="label">Forging status</div>
       <div class="health">
-        <div title="Forging"><div class="value green">{healthCounts.forging}</div><div class="sub">forging</div></div>
-        <div title="Missed their last slot"><div class="value warn">{healthCounts.missed}</div><div class="sub">missed</div></div>
-        <div title="Missed several turns in a row over at least ~3.5 minutes"><div class="value red">{healthCounts["not-forging"]}</div><div class="sub">dead</div></div>
+        <div title="Forging"><div class="value green">{healthCounts ? healthCounts.forging : "…"}</div><div class="sub">forging</div></div>
+        <div title="Missed their last slot"><div class="value warn">{healthCounts ? healthCounts.missed : "…"}</div><div class="sub">missed</div></div>
+        <div title="Missed several turns in a row over at least ~3.5 minutes"><div class="value red">{healthCounts ? healthCounts["not-forging"] : "…"}</div><div class="sub">dead</div></div>
       </div>
     </div>
     <div class="stat">
@@ -190,7 +195,7 @@
                 <td class="num faint right">{pos || "–"}</td>
                 <td>
                   <span class="name">
-                    {#if h}<span class="hdot {h}" title={h === "forging" ? "Forging" : h === "missed" ? "Missed its last turn" : "Dead: missed its last turns in a row (several minutes without a block)"}></span>{/if}
+                    {#if h}<span class="hdot {h}" title={h === "forging" ? "Forging" : h === "missed" ? "Missed its last turn" : h === "unknown" ? "Checking recent blocks…" : "Dead: missed its last turns in a row (several minutes without a block)"}></span>{/if}
                     <a class="trunc" href="#/wallet/{d.address}" title={d.username}>{d.username}</a>
                   </span>
                 </td>
@@ -349,6 +354,10 @@
   }
   .hdot.not-forging {
     background: var(--red);
+  }
+  .hdot.unknown {
+    background: var(--faint);
+    opacity: 0.6;
   }
   a.pill:hover {
     text-decoration: none;
