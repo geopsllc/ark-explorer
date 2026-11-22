@@ -151,8 +151,7 @@
         </div>
         <div class="stat">
           <div class="label">Forged</div>
-          <div class="value">{arkCompact(BigInt(del.forgedRewards) + BigInt(del.forgedFees))}</div>
-          <div class="sub">{arkCompact(del.forgedRewards)} rewards · {arkCompact(del.forgedFees)} fees</div>
+          <div class="value">{arkCompact(BigInt(del.forgedRewards) + BigInt(del.forgedFees))} <span class="faint" style="font-size:14px">{TOKEN}</span></div>
         </div>
         {#if isActive}
           <div class="stat">
