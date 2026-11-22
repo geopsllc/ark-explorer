@@ -6,19 +6,16 @@
   import { dir, missed, missedSinceLastBlock, wantVoters } from "../lib/delegates.svelte";
   import { ago, agoShort, arkCompact, countdown, formatInt } from "../lib/format";
   import { untrack } from "svelte";
-  import { load, save } from "../lib/storage";
   import type { Delegate } from "../lib/types";
 
   type Mode = "rank" | "order";
   type Tab = "active" | "standby" | "resigned";
 
-  let mode = $state<Mode>(load<Mode>("ark-explorer:delegates-mode") ?? "rank");
+  let mode = $state<Mode>("rank"); // always opens in Rank View
   let tab = $state<Tab>("active");
   let filter = $state("");
   let page = $state(1);
   const PAGE = 50;
-
-  $effect(() => save("ark-explorer:delegates-mode", mode));
 
   const n = $derived(chain.activeDelegates);
   const active = $derived(dir.list.filter((d) => !d.isResigned && d.rank > 0 && d.rank <= n));
