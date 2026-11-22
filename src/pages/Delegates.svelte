@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { SYMBOL, TOKEN } from "../lib/site";
+  import Sym from "../components/Sym.svelte";
+  import { SYMBOL } from "../lib/site";
   import { chain, slotAt, slotOf, slotStartMs } from "../lib/chain";
   import { live } from "../lib/live.svelte";
   import { dir, missed, missedSinceLastBlock, wantVoters } from "../lib/delegates.svelte";
@@ -169,8 +170,8 @@
     </div>
     <div class="stat">
       <div class="label">Active votes</div>
-      <div class="value">{arkCompact(totalActiveVotes)}</div>
-      <div class="sub">{TOKEN} voting for the top {n}</div>
+      <div class="value">{arkCompact(totalActiveVotes)}<Sym /></div>
+      <div class="sub">voting for the top {n}</div>
     </div>
   </div>
 
@@ -198,9 +199,9 @@
               <th>Validator</th>
               <th class="c-round">Round</th>
               {#if mode === "order"}<th class="right c-rank">Rank</th>{/if}
-              <th class="right c-votes" title="Votes ({TOKEN})">Votes</th>
+              <th class="right c-votes" title="Votes ({SYMBOL})">Votes</th>
               <th class="right c-pct">%</th>
-              <th class="right c-voters" title="Voters holding at least 1 {TOKEN}">Voters</th>
+              <th class="right c-voters" title="Voters holding at least 1 {SYMBOL}">Voters</th>
               <th class="right c-blocks" title="Blocks produced">Blocks</th>
               <th class="right c-missed" title="Missed slots in the last {missed.windowHours} hours">Missed</th>
               <th class="right c-last" title="Time since the last forged block">Last</th>
@@ -238,7 +239,7 @@
                   {/if}
                 </td>
                 {#if mode === "order"}<td class="num muted right c-rank">{d.rank}</td>{/if}
-                <td class="right c-votes">{arkCompact(d.votes)}</td>
+                <td class="right c-votes">{arkCompact(d.votes)}<Sym /></td>
                 <td class="right muted c-pct">{pct(d)}</td>
                 <td class="right c-voters">{dir.voters[d.publicKey] !== undefined ? formatInt(dir.voters[d.publicKey]) : ""}{#if dir.voters[d.publicKey] === undefined}<span class="skeleton" style="width:30px"></span>{/if}</td>
                 <td class="right c-blocks">{formatInt(d.blocks.produced)}</td>
@@ -291,22 +292,22 @@
     gap: 8px;
   }
   /* columns drop out least-important first; breakpoints from the measured natural widths */
-  @media (max-width: 905px) {
+  @media (max-width: 950px) {
     .c-rank {
       display: none;
     }
   }
-  @media (max-width: 840px) {
+  @media (max-width: 885px) {
     .c-pct {
       display: none;
     }
   }
-  @media (max-width: 770px) {
+  @media (max-width: 815px) {
     .c-voters {
       display: none;
     }
   }
-  @media (max-width: 690px) {
+  @media (max-width: 735px) {
     .c-blocks {
       display: none;
     }

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Sym from "../components/Sym.svelte";
   import { onDestroy, untrack } from "svelte";
   import Addr from "../components/Addr.svelte";
   import Amount from "../components/Amount.svelte";
@@ -8,7 +9,6 @@
   import { formatInt } from "../lib/format";
   import { loader } from "../lib/loader.svelte";
   import { route, setQuery } from "../lib/router.svelte";
-  import { TOKEN } from "../lib/site";
   import type { Wallet } from "../lib/types";
 
   // The API's balance-ordered wallet list is fast at any depth once dust is filtered out
@@ -42,7 +42,7 @@
   <div class="page-head">
     <div>
       <h1>Wallets</h1>
-      <p>{total ? `${formatInt(total)} wallets holding at least 1 ${TOKEN}` : ""}{total ? " · largest first" : ""}</p>
+      <p>{#if total}{formatInt(total)} wallets holding at least 1<Sym /> · largest first{/if}</p>
     </div>
   </div>
   <div class="card">

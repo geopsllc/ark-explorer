@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Sym from "./Sym.svelte";
   import Addr from "./Addr.svelte";
   import { live } from "../lib/live.svelte";
   import { delegateByPk } from "../lib/delegates.svelte";
@@ -52,9 +53,9 @@
             {:else}<span class="faint">–</span>{/if}
           </span></td>
           <td class="right" class:green={me && amt > 0n} class:red={me && amt < 0n}>
-            {#if amt === 0n}<span class="faint">0</span>{:else}{me && amt > 0n ? "+" : ""}{me && amt < 0n ? "-" : ""}{arkCompact(amt < 0n ? -amt : amt)}{/if}
+            {#if amt === 0n}<span class="faint">0</span>{:else}{me && amt > 0n ? "+" : ""}{me && amt < 0n ? "-" : ""}{arkCompact(amt < 0n ? -amt : amt)}<Sym />{/if}
           </td>
-          <td class="right muted t-fee">{arkCompact(t.fee)}</td>
+          <td class="right muted t-fee">{arkCompact(t.fee)}<Sym /></td>
           {#if showBlock}
             <td class="right t-block">{#if t.height}<a href="#/block/{t.height}">{formatInt(t.height)}</a>{:else}<a href="#/block/{t.blockId}">view</a>{/if}</td>
           {/if}
@@ -80,17 +81,17 @@
       display: inline;
     }
   }
-  @media (max-width: 930px) {
+  @media (max-width: 955px) {
     .t-block {
       display: none;
     }
   }
-  @media (max-width: 840px) {
+  @media (max-width: 855px) {
     .t-fee {
       display: none;
     }
   }
-  @media (max-width: 740px) {
+  @media (max-width: 770px) {
     .t-from {
       display: none;
     }

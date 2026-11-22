@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Sym from "../components/Sym.svelte";
   import { onDestroy, untrack } from "svelte";
   import Addr from "../components/Addr.svelte";
   import Pager from "../components/Pager.svelte";
@@ -84,9 +85,9 @@
               <td class="muted"><span class="wide-only">{ago(b.timestamp.unix, live.now)}</span><span class="narrow-only">{agoShort(b.timestamp.unix, live.now)}</span></td>
               <td><span class="trunc forger" style="--trunc:150px"><Addr address={b.generator.address} /></span></td>
               <td class="right" class:faint={!b.transactions}>{b.transactions}</td>
-              <td class="right b-amount">{arkCompact(b.forged.amount)}</td>
-              <td class="right muted b-fees">{arkCompact(b.forged.fee)}</td>
-              <td class="right muted b-reward">{arkCompact(b.forged.reward)}</td>
+              <td class="right b-amount">{arkCompact(b.forged.amount)}<Sym /></td>
+              <td class="right muted b-fees">{arkCompact(b.forged.fee)}<Sym /></td>
+              <td class="right muted b-reward">{arkCompact(b.forged.reward)}<Sym /></td>
             </tr>
           {:else}
             <tr><td colspan="7" class="muted">{l.state.loading || !live.tip ? "Loading…" : "No blocks."}</td></tr>

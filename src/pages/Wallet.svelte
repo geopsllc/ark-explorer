@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Sym from "../components/Sym.svelte";
   import { onDestroy, untrack } from "svelte";
   import Addr from "../components/Addr.svelte";
   import Amount from "../components/Amount.svelte";
@@ -7,7 +8,6 @@
   import TxTable from "../components/TxTable.svelte";
   import { ApiError, get, pagedNewestFirst } from "../lib/api";
   import { attachHeights } from "../lib/heights";
-  import { SYMBOL, TOKEN } from "../lib/site";
   import { chain } from "../lib/chain";
   import { live, onNewBlocks } from "../lib/live.svelte";
   import { loader } from "../lib/loader.svelte";
@@ -118,7 +118,7 @@
     <div class="stats">
       <div class="stat">
         <div class="label">Balance</div>
-        <div class="value">{arkCompact(wallet.balance)} <span class="faint" style="font-size:14px">{TOKEN}</span></div>
+        <div class="value">{arkCompact(wallet.balance)}<Sym /></div>
         <div class="sub"><Amount value={wallet.balance} /></div>
       </div>
       <div class="stat">
@@ -133,7 +133,7 @@
       {#if del}
         <div class="stat">
           <div class="label">Votes received</div>
-          <div class="value">{arkCompact(del.voteBalance)}</div>
+          <div class="value">{arkCompact(del.voteBalance)}<Sym /></div>
           <div class="sub">
             {delegate ? `${delegate.production.approval.toFixed(2)}% · ` : ""}{dir.voters[wallet.publicKey ?? ""] !== undefined
               ? `${formatInt(dir.voters[wallet.publicKey ?? ""])} voters`
@@ -151,8 +151,8 @@
         </div>
         <div class="stat">
           <div class="label">Forged</div>
-          <div class="value">{arkCompact(BigInt(del.forgedRewards) + BigInt(del.forgedFees))} <span class="faint" style="font-size:14px">{TOKEN}</span></div>
-          <div class="sub">{arkCompact(del.forgedFees)} {TOKEN} in fees</div>
+          <div class="value">{arkCompact(BigInt(del.forgedRewards) + BigInt(del.forgedFees))}<Sym /></div>
+          <div class="sub">{arkCompact(del.forgedFees)}<Sym /> in fees</div>
         </div>
         {#if isActive}
           <div class="stat">
