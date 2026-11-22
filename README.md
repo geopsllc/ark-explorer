@@ -69,6 +69,22 @@ minutes). The result is cached, so later visits only check new blocks.
 
 ## Install
 
+### Quick install: prebuilt download
+
+Every [release](https://github.com/geopsllc/ark-explorer/releases/latest) includes the finished site as
+`ark-explorer.zip` and `ark-explorer.tar.gz` (plus `SHA256SUMS`). The files sit at the archive root, so unpack them
+straight into a folder your webserver serves:
+
+```bash
+mkdir -p /var/www/explorer
+curl -L https://github.com/geopsllc/ark-explorer/releases/latest/download/ark-explorer.tar.gz \
+  | tar -xz -C /var/www/explorer
+```
+
+No Node.js needed. To update, replace the folder's contents with a newer release. Then see
+[Deploy to an existing webserver](#deploy-to-an-existing-webserver) for HTTPS and caching tips. To build it
+yourself instead, read on.
+
 ### Requirements
 
 - [Node.js](https://nodejs.org) 20 or newer, plus npm. This is only needed to build, not to host.

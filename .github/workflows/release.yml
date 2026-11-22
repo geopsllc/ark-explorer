@@ -1,0 +1,56 @@
+# Builds the explorer and attaches the ready-to-serve site to a GitHub release, so it can be
+# hosted without Node.js: download, unpack into a folder your webserver serves, done.
+#
+# Trigger: push a tag like v0.2.0 (it should match "version" in package.json),
+# or run it from the Actions tab with a tag name to (re)build that release.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, e.g. v0.2.0 (created on the selected branch if it doesn't exist)"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm run build
+
+      - name: Package dist/
+        run: |
+          name="ark-explorer"  # fixed name so releases/latest/download/ark-explorer.zip always works
+          mkdir -p out
+          # files sit at the archive root: unpack straight into the served folder
+          (cd dist && zip -qr "../out/${name}.zip" .)
+          tar -czf "out/${name}.tar.gz" -C dist .
+          (cd out && sha256sum * > SHA256SUMS)
+          cat out/SHA256SUMS
+
+      - name: Create or update the release
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" out/* --clobber
+          else
+            gh release create "$TAG" out/* --target "$GITHUB_SHA" --title "ARK Explorer $TAG" --notes \
+          "Prebuilt site for ARK mainnet. Unpack the zip or tar.gz into any folder your webserver serves; no Node.js, rewrite rules or configuration needed. See the README for hosting tips."
+          fi
