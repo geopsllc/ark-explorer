@@ -125,7 +125,7 @@
   <div class="page-head">
     <div>
       <h1>Validators</h1>
-      <p>Live forging monitor and validator list for ARK mainnet.</p>
+      <p>Live forging monitor</p>
     </div>
     <div class="seg" role="tablist" aria-label="Order">
       <button class:on={mode === "rank"} onclick={() => (mode = "rank")}>Rank View</button>

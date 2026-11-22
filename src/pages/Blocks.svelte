@@ -58,7 +58,7 @@
   <div class="page-head">
     <div>
       <h1>Blocks</h1>
-      <p>{page === 1 ? "Latest blocks, updated live." : `Blocks below #${formatInt(anchor)}.`}</p>
+      <p>{page === 1 ? "Latest, live" : `Below #${formatInt(anchor)}`}</p>
     </div>
   </div>
   <div class="card">

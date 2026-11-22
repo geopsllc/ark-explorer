@@ -46,7 +46,7 @@
   <div class="page-head">
     <div>
       <h1>Transactions</h1>
-      <p>{total ? `${formatInt(total)} transactions` : ""}{page === 1 ? " · newest first, updated live" : ""}</p>
+      <p>{total ? formatInt(total) : ""}{total && page === 1 ? " · live" : ""}</p>
     </div>
   </div>
   <div class="card">

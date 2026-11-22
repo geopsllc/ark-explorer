@@ -46,7 +46,7 @@
   <div class="page-head">
     <div>
       <h1>{t ? txTypeName(t) : "Transaction"}</h1>
-      {#if t}<p>{pending ? "Waiting in the pool for a block" : `Confirmed ${ago(t.timestamp.unix, live.now)}`}</p>{/if}
+      {#if t}<p>{pending ? "Waiting for a block" : `Confirmed ${ago(t.timestamp.unix, live.now)}`}</p>{/if}
     </div>
     {#if t}
       {#if pending}<span class="pill warn"><span class="dot pulse"></span>Pending</span>

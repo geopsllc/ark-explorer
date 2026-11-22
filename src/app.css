@@ -106,18 +106,29 @@ select {
 .page {
   max-width: 1280px;
   margin: 0 auto;
-  padding: 24px 20px 60px;
+  padding: 12px 20px 60px;
 }
+/* page title and its one-line description share a line, close under the site header */
 .page-head {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 8px 16px;
   flex-wrap: wrap;
-  margin-bottom: 18px;
+  margin-bottom: 12px;
+}
+.page-head > div:first-child {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  min-width: 0;
+}
+.page-head h1 {
+  font-size: 20px;
 }
 .page-head p {
-  margin: 4px 0 0;
+  margin: 0;
   color: var(--muted);
 }
 
@@ -352,7 +363,7 @@ select:focus {
     border-bottom: 0;
   }
   .page {
-    padding: 16px 12px 48px;
+    padding: 10px 12px 48px;
   }
   .stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));

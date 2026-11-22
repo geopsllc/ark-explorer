@@ -42,7 +42,7 @@
   <div class="page-head">
     <div>
       <h1>Wallets</h1>
-      <p>{#if total}{formatInt(total)} wallets holding at least 1<Sym /> · largest first{/if}</p>
+      <p>{#if total}{formatInt(total)} with 1<Sym /> or more{/if}</p>
     </div>
   </div>
   <div class="card">
