@@ -12,7 +12,7 @@
   import { chain } from "../lib/chain";
   import { live, onNewBlocks } from "../lib/live.svelte";
   import { loader } from "../lib/loader.svelte";
-  import { delegateByPk, dir, missed, missedSinceLastBlock } from "../lib/delegates.svelte";
+  import { delegateByPk, dir, forgingHealth, missed, missedSinceLastBlock } from "../lib/delegates.svelte";
   import { route, setQuery } from "../lib/router.svelte";
   import { ago, arkCompact, formatInt } from "../lib/format";
   import { involves } from "../lib/txinfo";
@@ -94,6 +94,7 @@
   const pages = $derived(Math.max(1, Math.ceil((totals[tab] ?? 0) / SIZE)));
   const isActive = $derived(!!delegate && !delegate.isResigned && delegate.rank > 0 && delegate.rank <= chain.activeDelegates);
   const healthMissed = $derived(delegate ? (void missed.lastMissed, missedSinceLastBlock(delegate)) : 0);
+  const healthState = $derived(delegate ? (void missed.lastMissed, forgingHealth(delegate)) : "forging");
   const tabs = $derived([
     { key: "all", label: "Transactions" },
     { key: "sent", label: "Sent" },
@@ -169,7 +170,7 @@
             <div class="label">Missed ({missed.windowHours} h)</div>
             <div class="value" class:warn={(missed.counts[wallet.publicKey ?? ""] ?? 0) > 0}>{missed.counts[wallet.publicKey ?? ""] ?? 0}</div>
             <div class="sub">
-              {#if healthMissed === 0}<span class="green">forging</span>{:else if healthMissed === 1}<span class="warn">missed last slot</span>{:else}<span class="red">dead</span>{/if}
+              {#if healthState === "forging"}<span class="green">forging</span>{:else if healthState === "missed"}<span class="warn">missed {healthMissed > 1 ? `last ${healthMissed} turns` : "last turn"}</span>{:else}<span class="red">dead</span> <span class="faint">({healthMissed} missed turns in a row)</span>{/if}
               {#if !missed.ready} · scanning {Math.round(missed.progress * 100)}%{/if}
             </div>
           </div>

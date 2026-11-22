@@ -3,10 +3,11 @@
   import { SYMBOL } from "../lib/site";
   import { chain, slotAt, slotOf, slotStartMs } from "../lib/chain";
   import { live } from "../lib/live.svelte";
-  import { dir, missed, missedSinceLastBlock, wantVoters } from "../lib/delegates.svelte";
+  import { dir, forgingHealth, missed, wantVoters } from "../lib/delegates.svelte";
   import { ago, agoShort, arkCompact, countdown, formatInt } from "../lib/format";
   import { untrack } from "svelte";
   import type { Delegate } from "../lib/types";
+  import { forgerOf, roundEndSlot, roundSlots, validatorStatus, type TurnStatus } from "../lib/roundview";
 
   type Mode = "rank" | "order";
   type Tab = "active" | "standby" | "resigned";
@@ -26,53 +27,21 @@
   const curSlot = $derived(slotAt(live.now));
   const tipSlot = $derived(live.tip ? slotOf(live.tip.timestamp.epoch) : 0);
 
-  // ----- round status per active delegate -----
-  type RoundStatus =
-    | { kind: "forged"; height: number; slot: number }
-    | { kind: "missed"; slot: number }
-    | { kind: "forging"; slot: number }
-    | { kind: "late"; slot: number }
-    | { kind: "pending"; slot: number; eta: number; next: boolean };
-
-  /** Slot of each delegate's turn in the current round, in rotation order. */
-  const rotation = $derived.by(() => {
-    const r = live.round;
-    if (!r) return [] as { pk: string; slot: number }[];
-    return Array.from({ length: n }, (_, p) => {
-      const slot = r.firstSlot + p;
-      return { pk: r.order[slot % n], slot };
-    });
-  });
-
-  const roundStatus = $derived.by(() => {
-    const r = live.round;
-    const out = new Map<string, RoundStatus>();
-    if (!r) return out;
-    for (const { pk, slot } of rotation) {
-      const again = slot + n; // second turn when slots were missed earlier in the round
-      const f = r.forged[again] ?? r.forged[slot];
-      let st: RoundStatus;
-      if (f) st = { kind: "forged", height: f.height, slot: r.forged[again] ? again : slot };
-      else if (slot < tipSlot) st = { kind: "missed", slot };
-      else if (slot === curSlot) st = { kind: "forging", slot };
-      else if (slot < curSlot) st = { kind: "late", slot };
-      else st = { kind: "pending", slot, eta: slotStartMs(slot) - live.now, next: slot === curSlot + 1 };
-      // a missed delegate gets another turn if the round runs past its first pass
-      if (st.kind === "missed" && again === curSlot) st = { kind: "forging", slot: again };
-      out.set(pk, st);
-    }
-    return out;
-  });
-
-  const forgingNow = $derived(live.round ? byPk.get(live.round.order[curSlot % n]) : undefined);
-  const nextUp = $derived(live.round ? byPk.get(live.round.order[(curSlot + 1) % n]) : undefined);
+  // ----- round status (rules and edge cases in lib/roundview.ts) -----
+  type RoundStatus = TurnStatus;
+  const roundEnd = $derived(live.round ? roundEndSlot(live.round, tipSlot, n) : -1);
+  /** Rank View: one status per validator */
+  const roundStatus = $derived(live.round ? validatorStatus(live.round, tipSlot, curSlot, n) : new Map<string, TurnStatus>());
+  /** Forging View: one row per slot; grows by one row per missed slot */
+  const slotRows = $derived(live.round ? roundSlots(live.round, tipSlot, curSlot, n) : []);
+  const forgingNow = $derived(live.round ? byPk.get(forgerOf(live.round, curSlot, tipSlot, n) ?? "") : undefined);
+  const nextUp = $derived(live.round ? byPk.get(forgerOf(live.round, curSlot + 1, tipSlot, n) ?? "") : undefined);
+  /** the slot after this one starts a new round (if the blocks in flight arrive) */
+  const nextIsNewRound = $derived(!!live.round && curSlot + 1 > roundEnd);
   const slotLeft = $derived(slotStartMs(curSlot + 1) - live.now);
 
   // ----- forging health (from missed-slot history) -----
-  function health(d: Delegate): "forging" | "missed" | "not-forging" {
-    const m = missedSinceLastBlock(d);
-    return m === 0 ? "forging" : m === 1 ? "missed" : "not-forging";
-  }
+  const health = (d: Delegate) => forgingHealth(d);
   const healthCounts = $derived.by(() => {
     void missed.lastMissed;
     const c = { forging: 0, missed: 0, "not-forging": 0 };
@@ -85,12 +54,14 @@
   // ----- rows -----
   const rows = $derived.by(() => {
     if (mode === "order") {
-      return rotation.map(({ pk }, i) => ({ pos: i + 1, d: byPk.get(pk) })).filter((r) => r.d) as { pos: number; d: Delegate }[];
+      return slotRows
+        .map(({ slot, pk, st }, i) => ({ pos: i + 1, d: byPk.get(pk), key: `s${slot}`, st }))
+        .filter((r) => r.d) as { pos: number; d: Delegate; key: string; st?: RoundStatus }[];
     }
     const src = tab === "active" ? active : tab === "standby" ? standby : resigned;
     const f = filter.trim().toLowerCase();
     const list = f ? src.filter((d) => d.username.toLowerCase().includes(f) || d.address.toLowerCase() === f) : src;
-    return list.map((d) => ({ pos: d.rank, d }));
+    return list.map((d) => ({ pos: d.rank, d, key: d.publicKey, st: undefined as RoundStatus | undefined }));
   });
   const pages = $derived(Math.max(1, Math.ceil(rows.length / PAGE)));
   const visible = $derived(mode === "order" || tab === "active" ? rows : rows.slice((page - 1) * PAGE, page * PAGE));
@@ -151,14 +122,14 @@
     <div class="stat">
       <div class="label">Forging now</div>
       <div class="value"><a href="#/wallet/{forgingNow?.address}">{forgingNow?.username ?? "…"}</a></div>
-      <div class="sub next" title={nextUp?.username}><span>next:</span><span class="nname">{nextUp?.username ?? "…"}</span><span>in {countdown(slotLeft)}</span></div>
+      <div class="sub next" title={nextUp?.username}><span>next:</span><span class="nname">{nextUp?.username ?? (nextIsNewRound ? "new round" : "…")}</span><span>in {countdown(slotLeft)}</span></div>
     </div>
     <div class="stat">
       <div class="label">Forging status</div>
       <div class="health">
         <div title="Forging"><div class="value green">{healthCounts.forging}</div><div class="sub">forging</div></div>
         <div title="Missed their last slot"><div class="value warn">{healthCounts.missed}</div><div class="sub">missed</div></div>
-        <div title="Missed several slots in a row"><div class="value red">{healthCounts["not-forging"]}</div><div class="sub">dead</div></div>
+        <div title="Missed several turns in a row over at least ~3.5 minutes"><div class="value red">{healthCounts["not-forging"]}</div><div class="sub">dead</div></div>
       </div>
     </div>
     <div class="stat">
@@ -208,8 +179,8 @@
             </tr>
           </thead>
           <tbody>
-            {#each visible as { pos, d } (d.publicKey)}
-              {@const st = roundStatus.get(d.publicKey)}
+            {#each visible as { pos, d, key, st: slotSt } (key)}
+              {@const st = slotSt ?? roundStatus.get(d.publicKey)}
               {@const h = st ? health(d) : null}
               <tr
                 class:current={st?.kind === "forging"}
@@ -219,7 +190,7 @@
                 <td class="num faint right">{pos || "–"}</td>
                 <td>
                   <span class="name">
-                    {#if h}<span class="hdot {h}" title={h === "forging" ? "Forging" : h === "missed" ? "Missed last slot" : "Dead: missed several slots in a row"}></span>{/if}
+                    {#if h}<span class="hdot {h}" title={h === "forging" ? "Forging" : h === "missed" ? "Missed its last turn" : "Dead: missed its last turns in a row (several minutes without a block)"}></span>{/if}
                     <a class="trunc" href="#/wallet/{d.address}" title={d.username}>{d.username}</a>
                   </span>
                 </td>
@@ -227,15 +198,15 @@
                   {#if !st}
                     <span class="faint">–</span>
                   {:else if st.kind === "forged"}
-                    <a class="pill rp green" href="#/block/{st.height}" title="Forged block #{formatInt(st.height)}">{formatInt(st.height)}</a>
+                    <a class="pill rp green" href="#/block/{st.height}" title={st.blocks > 1 ? `Forged ${st.blocks} blocks this round (extra turns after missed slots); last #${formatInt(st.height)}` : `Forged block #${formatInt(st.height)}`}>{formatInt(st.height)}{#if st.blocks > 1}<span class="times">×{st.blocks}</span>{/if}</a>
                   {:else if st.kind === "forging"}
-                    <span class="pill rp accent" title="Forging now"><span class="dot pulse"></span>Now</span>
+                    <span class="pill rp accent" title={st.turn > 1 ? `Forging now (turn ${st.turn} this round)` : "Forging now"}><span class="dot pulse"></span>Now{#if st.turn > 1}<span class="times">#{st.turn}</span>{/if}</span>
                   {:else if st.kind === "late"}
                     <span class="pill rp warn" title="Slot passed, block not seen yet"><span class="dot pulse"></span>Late</span>
                   {:else if st.kind === "missed"}
-                    <span class="pill rp red">Missed</span>
+                    <span class="pill rp red" title={st.misses > 1 ? `Missed ${st.misses} turns this round` : "Missed its slot"}>Missed{#if st.misses > 1}<span class="times">×{st.misses}</span>{/if}</span>
                   {:else}
-                    <span class="pill rp" class:accent={st.next} title={st.next ? "Forges next" : "Time until its slot"}>{countdown(st.eta)}</span>
+                    <span class="pill rp" class:accent={st.next} title={(st.turn > 1 ? `Extra turn ${st.turn}: the round runs long after missed slots. ` : "") + (st.next ? "Forges next" : "Time until its slot")}>{countdown(slotStartMs(st.slot) - live.now)}{#if st.turn > 1}<span class="times">#{st.turn}</span>{/if}</span>
                   {/if}
                 </td>
                 {#if mode === "order"}<td class="num muted right c-rank">{d.rank}</td>{/if}
@@ -268,6 +239,11 @@
 </div>
 
 <style>
+  .times {
+    margin-left: 4px;
+    opacity: 0.75;
+    font-size: 11px;
+  }
   /* one line whatever the name: a long name is cut, the countdown stays (a wrap would make the tile row jump) */
   .sub.next {
     display: flex;

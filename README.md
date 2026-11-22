@@ -19,10 +19,14 @@ Live instance: **https://ark.geops.net**
   - voter count (voters holding at least 1 ARK, the same count ArkScan shows)
   - blocks produced
   - missed blocks in the last 24 h
-  - forging health: forging, missed last slot, or dead (missed several slots in a row)
+  - forging health: forging, missed (its last turn), or dead (2 missed turns in a row over at least ~3.5 min, or 3+)
   - time since its last block
 
   Active, standby and resigned validators are listed separately, and you can filter them by name.
+
+  Rounds follow ARK Core exactly: a round is 51 **blocks**, and a slot's forger is `order[slot % 51]`. Every missed
+  slot stretches the round by one slot, so validators from the start of the order get extra turns (a down validator
+  can get several and miss them all). Forging View has one row per slot: 51 rows, plus one for each miss.
 - **Blocks**: a live list of the latest blocks, paging through the whole chain, and a detail page for each block with
   its transactions.
 - **Transactions**: a live list of the latest transactions and a detail page for each one. Detail pages cover all
@@ -184,6 +188,7 @@ npm run dev        # http://localhost:1430 with hot reload
 npm run check      # type-check
 npm run build      # production build into dist/
 npm run preview    # serve dist/ on http://localhost:1431
+npm run test:rounds   # replay past mainnet rounds through the round logic (needs network)
 ```
 
 ## Tech
@@ -196,6 +201,7 @@ site is under 50 KB gzipped.
 | `src/lib/api.ts` | Request budget, priorities, timeouts, retries, failover and deep paging |
 | `src/lib/live.svelte.ts` | Slot-aware poller, leader tab election and live state |
 | `src/lib/chain.ts` | Slot and round math and the forging-order shuffle |
+| `src/lib/roundview.ts` | Who forges which slot of the round, extra turns, and forging health (pure functions) |
 | `src/lib/delegates.svelte.ts` | Validator directory, voter counts and the missed-block scan |
 | `src/pages/` | Validators (`Delegates.svelte`), Blocks, Block, Transactions, Transaction, Wallets and Wallet pages |
 

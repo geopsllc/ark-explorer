@@ -17,6 +17,7 @@
 import { get } from "./api";
 import { MISSED_WINDOW_HOURS, STORE } from "./site";
 import { chain, roundOf, roundOrder, slotAt, slotOf } from "./chain";
+import { healthFromStreak } from "./roundview";
 import { live, nowMs, onNewBlocks } from "./live.svelte";
 import { load, save } from "./storage";
 import { knownWallet } from "./known.svelte";
@@ -206,7 +207,9 @@ export const missed = $state({
 
 const scanKey = () => `${STORE}:missed`;
 let scan: ScanState | null = null;
-const MAX_GAP = 51; // a longer gap is a network stall; record one round of misses at most
+// Like Core's detectMissedBlocks: a gap records at most activeDelegates misses, the first ones after
+// the previous block (a longer gap is a network stall, not 51+ individual failures).
+const MAX_GAP = 51;
 
 const windowSlots = () => Math.round((MISSED_WINDOW_HOURS * 3600) / chain.blocktime);
 
@@ -214,7 +217,9 @@ async function gapEvents(a: { height: number; slot: number }, b: { height: numbe
   if (b.slot - a.slot <= 1) return [];
   const order = await roundOrder(roundOf(b.height), "bulk");
   const out: MissedEvent[] = [];
-  for (let s = Math.max(a.slot + 1, b.slot - MAX_GAP); s < b.slot; s++) {
+  // the missing block would have had b's height, so b's round order decides who missed (Core uses the
+  // round state at that height too, which is the next round right after a round's last block)
+  for (let s = a.slot + 1; s < Math.min(b.slot, a.slot + 1 + MAX_GAP); s++) {
     out.push({ slot: s, height: b.height, pk: order[s % chain.activeDelegates] });
   }
   return out;
@@ -322,11 +327,21 @@ export async function startMissedScan() {
   setInterval(recount, 60_000); // let old events fall out of the window
 }
 
-/** Forging status from missed-slot history: 0 = forging, 1 = missed last slot, 2+ = not forging. */
-export function missedSinceLastBlock(d: Delegate): number {
+/** Missed turns since the delegate's last forged block (its current streak), oldest first. */
+function missStreak(d: Delegate): number[] {
   const lastMissed = missed.lastMissed[d.publicKey];
-  if (!lastMissed || !scan) return 0;
+  if (!lastMissed || !scan) return [];
   const lastForged = d.blocks.last ? slotOf(d.blocks.last.timestamp.epoch) : 0;
-  if (lastMissed < lastForged) return 0;
-  return scan.events.filter((e) => e.pk === d.publicKey && e.slot > lastForged).length;
+  if (lastMissed < lastForged) return [];
+  return scan.events.filter((e) => e.pk === d.publicKey && e.slot > lastForged).map((e) => e.slot).sort((a, b) => a - b);
+}
+
+/** Missed turns in a row, since the last forged block. */
+export function missedSinceLastBlock(d: Delegate): number {
+  return missStreak(d).length;
+}
+
+/** Forging health; the rule (and why) is in roundview.ts. */
+export function forgingHealth(d: Delegate): "forging" | "missed" | "not-forging" {
+  return healthFromStreak(missStreak(d), chain.activeDelegates);
 }
