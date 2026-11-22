@@ -1,0 +1,139 @@
+# Builds the explorer and publishes it to Cloudflare Pages, with a custom domain.
+# Branch per network: ark-mainnet is the production branch (other networks would get their own branch).
+#
+# Repository secrets (Settings → Secrets and variables → Actions → Secrets):
+#   CLOUDFLARE_API_TOKEN   token with  Account › Cloudflare Pages › Edit
+#                          and         Zone › DNS › Edit  (for the zone of CUSTOM_DOMAIN)
+#   CLOUDFLARE_ACCOUNT_ID  your Cloudflare account ID
+# Repository variables (optional, Settings → Secrets and variables → Actions → Variables):
+#   PAGES_PROJECT          Cloudflare Pages project name (default: ark-explorer)
+#   CUSTOM_DOMAIN          domain to serve the explorer on (default: ark.geops.net; set to "none" to skip)
+#
+# Without the secrets (e.g. in a fork) the build still runs and the deploy steps are skipped.
+name: Deploy
+
+on:
+  push:
+    branches: [ark-mainnet]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PAGES_PROJECT: ${{ vars.PAGES_PROJECT || 'ark-explorer' }}
+  CUSTOM_DOMAIN: ${{ vars.CUSTOM_DOMAIN || 'ark.geops.net' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist
+          retention-days: 7
+
+  deploy:
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/ark-mainnet'
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ steps.url.outputs.url }}
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - name: Check secrets
+        id: secrets
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::warning::CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID are not set; skipping deploy."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/download-artifact@v4
+        if: steps.secrets.outputs.ok == 'true'
+        with:
+          name: dist
+          path: dist
+
+      - name: Create the Pages project if it does not exist
+        if: steps.secrets.outputs.ok == 'true'
+        run: |
+          api="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects"
+          code=$(curl -s -o /tmp/project.json -w '%{http_code}' -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$api/$PAGES_PROJECT")
+          if [ "$code" = "404" ]; then
+            echo "Creating Pages project $PAGES_PROJECT"
+            curl -sf -X POST "$api" -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H "Content-Type: application/json" \
+              --data "{\"name\":\"$PAGES_PROJECT\",\"production_branch\":\"ark-mainnet\"}" > /tmp/project.json
+          elif [ "$code" != "200" ]; then
+            echo "::error::Could not read Pages project ($code): $(cat /tmp/project.json)"; exit 1
+          fi
+          echo "Project subdomain: $(jq -r .result.subdomain /tmp/project.json)"
+
+      - name: Deploy to Cloudflare Pages
+        if: steps.secrets.outputs.ok == 'true'
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy dist --project-name=${{ env.PAGES_PROJECT }} --branch=ark-mainnet --commit-dirty=true
+
+      - name: Attach the custom domain and its DNS record
+        if: steps.secrets.outputs.ok == 'true' && env.CUSTOM_DOMAIN != 'none'
+        run: |
+          auth=(-H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H "Content-Type: application/json")
+          api="https://api.cloudflare.com/client/v4"
+          project="$api/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/$PAGES_PROJECT"
+          target=$(curl -sf "${auth[@]}" "$project" | jq -r .result.subdomain)
+
+          # 1. the domain on the Pages project (idempotent)
+          if curl -sf "${auth[@]}" "$project/domains/$CUSTOM_DOMAIN" > /dev/null; then
+            echo "$CUSTOM_DOMAIN is already attached"
+          else
+            curl -sf -X POST "${auth[@]}" "$project/domains" --data "{\"name\":\"$CUSTOM_DOMAIN\"}" > /dev/null
+            echo "Attached $CUSTOM_DOMAIN"
+          fi
+
+          # 2. a proxied CNAME to the project's pages.dev name, in the zone that holds the domain
+          zone=""; name="$CUSTOM_DOMAIN"
+          while [ -z "$zone" ] && [[ "$name" == *.* ]]; do
+            zone=$(curl -sf "${auth[@]}" "$api/zones?name=$name" | jq -r '.result[0].id // empty')
+            [ -z "$zone" ] && name="${name#*.}"
+          done
+          if [ -z "$zone" ]; then
+            echo "::warning::No Cloudflare zone found for $CUSTOM_DOMAIN; create a CNAME $CUSTOM_DOMAIN -> $target yourself."
+            exit 0
+          fi
+          record=$(curl -sf "${auth[@]}" "$api/zones/$zone/dns_records?name=$CUSTOM_DOMAIN" | jq -r '.result[0].id // empty')
+          body="{\"type\":\"CNAME\",\"name\":\"$CUSTOM_DOMAIN\",\"content\":\"$target\",\"proxied\":true,\"comment\":\"ark-explorer (Cloudflare Pages)\"}"
+          if [ -n "$record" ]; then
+            curl -sf -X PUT "${auth[@]}" "$api/zones/$zone/dns_records/$record" --data "$body" > /dev/null
+            echo "Updated DNS record $CUSTOM_DOMAIN -> $target"
+          else
+            curl -sf -X POST "${auth[@]}" "$api/zones/$zone/dns_records" --data "$body" > /dev/null
+            echo "Created DNS record $CUSTOM_DOMAIN -> $target"
+          fi
+
+      - name: Site URL
+        id: url
+        run: |
+          if [ "$CUSTOM_DOMAIN" != "none" ]; then echo "url=https://$CUSTOM_DOMAIN" >> "$GITHUB_OUTPUT"
+          else echo "url=https://$PAGES_PROJECT.pages.dev" >> "$GITHUB_OUTPUT"; fi
