@@ -171,7 +171,7 @@
     <div class="stat">
       <div class="label">Active votes</div>
       <div class="value">{arkCompact(totalActiveVotes)}<Sym /></div>
-      <div class="sub">voting for the top {n}</div>
+      <div class="sub" title="Votes on the top {n} validators as a share of the total supply">{live.supply ? `${(Number((totalActiveVotes * 10000n) / live.supply) / 100).toFixed(2)}% of supply` : "…"}</div>
     </div>
   </div>
 

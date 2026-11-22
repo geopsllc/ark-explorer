@@ -130,7 +130,8 @@ export function startDirectory() {
       }
     }
     const r = roundOf(blocks[blocks.length - 1].height);
-    if (lastRound && r !== lastRound && live.leader) refreshTop();
+    // every visible tab (not just the polling one): one request per round keeps votes current
+    if (lastRound && r !== lastRound && !document.hidden) refreshTop();
     lastRound = r;
   });
 }
