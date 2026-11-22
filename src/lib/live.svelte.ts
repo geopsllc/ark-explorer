@@ -64,10 +64,14 @@ export const nowMs = () => Date.now() + live.clockOffset;
 // ---------- clock correction ----------
 // Blocks normally show up 0.8-1.8 s after their slot starts. If the arrival delay is far outside
 // that range the local clock is wrong; correct it so countdowns and "forging now" stay right.
+// Only tight samples count: the block must have been missing from a poll made shortly before the
+// one that found it. A block that was simply fetched late (slow network, a busy or throttled tab)
+// says nothing about the clock, and counting it would push the poll schedule later and later.
 const delays: number[] = [];
+const TIGHT_MS = 1500;
 function noteArrival(b: Block) {
   const d = Date.now() - b.timestamp.unix * 1000;
-  if (d < -120_000 || d > 120_000) return; // catch-up, not a fresh block
+  if (d < -120_000 || d > 120_000) return;
   delays.push(d);
   if (delays.length > 15) delays.shift();
   if (delays.length < 3) return;
@@ -75,6 +79,8 @@ function noteArrival(b: Block) {
   const skew = sorted[sorted.length >> 1] - 1200;
   live.clockOffset = Math.abs(skew) > 2500 ? -skew : 0;
 }
+/** The last poll that came back empty: which height it asked for and when it was sent (local clock). */
+let lastEmpty = { height: 0, at: 0 };
 
 // ---------- applying blocks ----------
 function txsFrom(block: Block, txs: Transaction[]) {
@@ -93,7 +99,7 @@ async function fetchBlockTxs(b: Block, priority: "live" | "interactive"): Promis
   return txsFrom(b, out);
 }
 
-function applyBlocks(blocks: Block[], txs: Transaction[], fresh: boolean, notify = true) {
+function applyBlocks(blocks: Block[], txs: Transaction[], notify = true) {
   if (!blocks.length) return;
   blocks.sort((a, b) => a.height - b.height);
   const tipHeight = live.tip?.height ?? 0;
@@ -104,7 +110,6 @@ function applyBlocks(blocks: Block[], txs: Transaction[], fresh: boolean, notify
   const ids = new Set(newer.map((b) => b.id));
   const newTxs = txs.filter((t) => ids.has(t.blockId)).sort((a, b) => (b.height ?? 0) - (a.height ?? 0));
   if (newTxs.length) live.txs = [...newTxs, ...live.txs].slice(0, KEEP_TXS);
-  if (fresh) noteArrival(live.tip);
   live.lastSuccess = Date.now();
   live.status = "live";
   live.error = "";
@@ -172,7 +177,7 @@ async function resync(priority: "interactive" | "live" = "interactive") {
   live.tip = null;
   live.blocks = [];
   live.round = null;
-  applyBlocks(blocks, [], false, false);
+  applyBlocks(blocks, [], false);
   // transactions of the last few blocks so the live list is not empty
   const withTxs = live.blocks.filter((b) => b.transactions > 0).slice(0, 4);
   const txs = (await Promise.all(withTxs.map((b) => fetchBlockTxs(b, priority).catch(() => [])))).flat();
@@ -223,20 +228,25 @@ function nextPollAt(now: number): number {
   }
 }
 
-async function poll() {
+async function poll(leader = true) {
   const tip = live.tip!;
-  lastPoll = nowMs();
-  const body = await get(`/blocks?height.from=${tip.height + 1}&orderBy=height:asc&limit=100`, "live");
+  const from = tip.height + 1;
+  const sent = Date.now();
+  if (leader) lastPoll = nowMs();
+  const body = await get(`/blocks?height.from=${from}&orderBy=height:asc&limit=100`, "live");
   const blocks = body.data as Block[];
   failures = 0;
   if (!blocks.length) {
+    lastEmpty = { height: from, at: sent };
     live.lastSuccess = Date.now();
     if (live.status !== "live") live.status = "live";
     return false;
   }
+  // one new block that a poll just before had not seen: a tight measure of when it appeared
+  if (leader && blocks.length === 1 && lastEmpty.height === from && sent - lastEmpty.at <= TIGHT_MS) noteArrival(blocks[0]);
   const txs = (await Promise.all(blocks.map((b) => fetchBlockTxs(b, "live").catch(() => [] as Transaction[])))).flat();
-  applyBlocks(blocks, txs, blocks.length < 5);
-  channel?.postMessage({ type: "blocks", blocks, txs });
+  applyBlocks(blocks, txs);
+  channel?.postMessage({ type: "blocks", blocks, txs, clockOffset: live.clockOffset });
   return blocks.length === 100; // more to catch up
 }
 
@@ -258,9 +268,16 @@ async function loop() {
       }
       continue;
     }
-    const wait = nextPollAt(nowMs()) - nowMs();
-    if (wait > 0) await sleep(Math.min(wait, 2000)); // re-evaluate at least every 2 s
-    if (!live.leader || nextPollAt(nowMs()) - nowMs() > 60) continue;
+    // Sleep until the planned poll, then poll. (Asking for the next poll time again after waking
+    // would skip it: a timer always fires a little after its target, so the poll time has passed.)
+    const tipHeight = live.tip.height;
+    const at = nextPollAt(nowMs());
+    let wait = at - nowMs();
+    while (wait > 0 && live.leader && live.tip?.height === tipHeight) {
+      await sleep(Math.min(wait, 2000)); // wake at least every 2 s to notice a lost leadership or a new tip
+      wait = at - nowMs();
+    }
+    if (!live.leader || live.tip?.height !== tipHeight) continue;
     try {
       const more = await poll();
       if (more) lastPoll = 0;
@@ -297,7 +314,8 @@ export async function startLive() {
         resync("live").catch(() => {});
         return;
       }
-      applyBlocks(blocks, m.txs as Transaction[], blocks.length < 5);
+      if (typeof m.clockOffset === "number") live.clockOffset = m.clockOffset; // the leader measures the clock
+      applyBlocks(blocks, m.txs as Transaction[]);
     };
   }
   electLeader();
@@ -310,7 +328,7 @@ export async function startLive() {
   // followers stay fresh even if the leader's messages are missed
   setInterval(() => {
     if (!live.leader && !document.hidden && live.tip && slotAt(nowMs()) - slotOf(live.tip.timestamp.epoch) > 4) {
-      poll().catch(() => {});
+      poll(false).catch(() => {});
     }
   }, 8000);
 
