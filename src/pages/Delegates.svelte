@@ -155,9 +155,9 @@
     <div class="card-head" class:tight={mode === "rank"}>
       {#if mode === "rank"}
         <div class="seg">
-          <button class:on={tab === "active"} onclick={() => (tab = "active")}>Active <span class="faint">{active.length}</span></button>
-          <button class:on={tab === "standby"} onclick={() => (tab = "standby")}>Standby <span class="faint">{standby.length}</span></button>
-          <button class:on={tab === "resigned"} onclick={() => (tab = "resigned")}>Resigned <span class="faint">{resigned.length}</span></button>
+          <button class:on={tab === "active"} onclick={() => (tab = "active")}>Active<span class="count faint">{active.length}</span></button>
+          <button class:on={tab === "standby"} onclick={() => (tab = "standby")}>Standby<span class="count faint">{standby.length}</span></button>
+          <button class:on={tab === "resigned"} onclick={() => (tab = "resigned")}>Resigned<span class="count faint">{resigned.length}</span></button>
         </div>
         <input class="text" placeholder="Filter by name" bind:value={filter} aria-label="Filter validators" />
       {:else}

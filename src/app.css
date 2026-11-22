@@ -309,6 +309,10 @@ tr.dim td {
   color: var(--muted);
   cursor: pointer;
 }
+/* a count after a tab's label ("Sent 28") */
+.seg .count {
+  margin-left: 0.35em;
+}
 .seg button.on {
   background: var(--card-hover);
   color: var(--text);

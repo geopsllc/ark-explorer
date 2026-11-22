@@ -80,6 +80,39 @@
     list.destroy();
   });
 
+  // every tab's count up front (one limit=1 request each), not just the tabs that were opened
+  const countsAbort = new AbortController();
+  onDestroy(() => countsAbort.abort());
+  async function loadCounts() {
+    if (!address) return;
+    if (cold) {
+      totals = { all: 0, sent: 0, received: 0 };
+      return;
+    }
+    const want: [string, string][] = [
+      ["all", `/wallets/${address}/transactions?limit=1`],
+      ["sent", `/wallets/${address}/transactions/sent?limit=1`],
+      ["received", `/wallets/${address}/transactions/received?limit=1`],
+    ];
+    if (del && wallet?.publicKey) want.push(["voters", `/delegates/${wallet.publicKey}/voters?limit=1`]);
+    await Promise.all(
+      want.map(async ([k, path]) => {
+        try {
+          const body = await get(path, "background", countsAbort.signal);
+          if (typeof body.meta?.totalCount === "number") totals[k] = body.meta.totalCount;
+        } catch {
+          /* the count shows up when the tab is opened */
+        }
+      }),
+    );
+  }
+  $effect(() => {
+    void address;
+    void cold;
+    void (del && wallet?.publicKey);
+    untrack(() => loadCounts());
+  });
+
   // live: refresh when a new block touches this wallet (or it forged one)
   const off = onNewBlocks((blocks, txs) => {
     if (!address) return;
@@ -87,6 +120,7 @@
     if (forged || txs.some((t) => involves(t, address))) {
       w.run(true);
       if (page === 1 && tab !== "voters") list.run(true);
+      loadCounts();
     }
   });
   onDestroy(off);
@@ -200,7 +234,7 @@
         <div class="seg">
           {#each tabs as t}
             <button class:on={tab === t.key} onclick={() => setQuery({ tab: t.key === "all" ? undefined : t.key, page: undefined })}>
-              {t.label}{#if totals[t.key] !== undefined}<span class="faint hide-xs"> {formatInt(totals[t.key])}</span>{/if}
+              {t.label}{#if totals[t.key] !== undefined}<span class="count faint hide-xs">{formatInt(totals[t.key])}</span>{/if}
             </button>
           {/each}
         </div>
