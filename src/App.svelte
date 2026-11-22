@@ -11,6 +11,7 @@
   import { PRIMARY_API, TITLE } from "./lib/site";
   import { live, startLive } from "./lib/live.svelte";
   import { startDirectory, startMissedScan } from "./lib/delegates.svelte";
+  import { startKnown } from "./lib/known.svelte";
   import { route, startRouter } from "./lib/router.svelte";
 
   let ready = $state(false);
@@ -19,6 +20,7 @@
     startRouter();
     ready = true;
     startDirectory();
+    startKnown();
     startLive();
   });
 

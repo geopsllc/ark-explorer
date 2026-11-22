@@ -1,5 +1,6 @@
 import { ApiError, get } from "./api";
 import { delegateByName, delegateByPk } from "./delegates.svelte";
+import { knownByName } from "./known.svelte";
 
 /** Resolve a search string to a route, or null. */
 export async function search(input: string): Promise<string | null> {
@@ -28,6 +29,8 @@ export async function search(input: string): Promise<string | null> {
   }
   const d = delegateByName(q);
   if (d) return `#/wallet/${d.address}`;
+  const k = knownByName(q);
+  if (k) return `#/wallet/${k.address}`;
   // directory may still be loading: ask the API
   try {
     const body = await get(`/delegates/${encodeURIComponent(q.toLowerCase())}`);

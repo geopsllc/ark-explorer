@@ -31,7 +31,13 @@ Live instance: **https://ark.geops.net**
 - **Wallets**: every wallet holding at least 1 ARK, largest first, with rank, share of supply and vote. Each
   wallet page shows balance, vote, public key, second-signature and multisignature details, transaction history (all, sent
   or received), and a voters tab for validators. A wallet page refreshes by itself when a new block touches that wallet.
-- **Search**: by address, validator name (with suggestions as you type), public key, transaction ID or block ID.
+- **Named wallets**: exchange and ARK team wallets get their names everywhere an address is shown, the same names
+  ArkScan uses. They come from ARK's public list,
+  [`ArkEcosystem/common` `mainnet/known-wallets-extended.json`](https://github.com/ArkEcosystem/common/blob/master/mainnet/known-wallets-extended.json):
+  a copy ships with the site (`src/lib/known-wallets.json`) and the live file is fetched from GitHub at most once a
+  day, so new entries show up without a rebuild.
+- **Search**: by address, validator or known wallet name (with suggestions as you type), public key, transaction ID
+  or block ID.
 - Works on phones; dark theme.
 
 ## How "near-live" works

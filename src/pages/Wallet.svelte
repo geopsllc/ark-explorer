@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { knownWallet } from "../lib/known.svelte";
   import Sym from "../components/Sym.svelte";
   import { onDestroy, untrack } from "svelte";
   import Addr from "../components/Addr.svelte";
@@ -39,6 +40,8 @@
   untrack(() => w.run());
 
   const wallet = $derived(w.state.data);
+  /** an exchange or ARK team wallet from the public known-wallets list */
+  const kw = $derived(knownWallet(wallet?.address ?? id));
   const address = $derived(wallet?.address ?? "");
   const del = $derived(wallet?.attributes?.delegate);
   const delegate = $derived(wallet?.publicKey ? delegateByPk(wallet.publicKey) : undefined);
@@ -97,7 +100,7 @@
 <div class="page">
   <div class="page-head">
     <div style="min-width:0">
-      <h1>{del?.username ?? "Wallet"}</h1>
+      <h1>{del?.username ?? kw?.name ?? "Wallet"}</h1>
       <p class="mono break">{wallet?.address ?? id} {#if wallet}<Copy text={wallet.address} />{/if}</p>
     </div>
     {#if del}
@@ -107,6 +110,8 @@
           <span class="pill green">Active validator · rank {delegate?.rank}</span>
         {:else}<span class="pill">Standby validator · rank {delegate?.rank ?? del.rank ?? "–"}</span>{/if}
       </div>
+    {:else if kw}
+      <div><span class="pill accent" title="Named in ARK's public known-wallets list">{kw.type === "team" ? "ARK team" : "Exchange"}</span></div>
     {/if}
   </div>
 

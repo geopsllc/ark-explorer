@@ -19,6 +19,7 @@ import { MISSED_WINDOW_HOURS, STORE } from "./site";
 import { chain, roundOf, roundOrder, slotAt, slotOf } from "./chain";
 import { live, nowMs, onNewBlocks } from "./live.svelte";
 import { load, save } from "./storage";
+import { knownWallet } from "./known.svelte";
 import type { Block, Delegate } from "./types";
 
 const DIRECTORY_TTL = 30 * 60_000;
@@ -39,10 +40,13 @@ const byName = new Map<string, Delegate>();
 export const delegateByPk = (pk: string | undefined | null) => (pk ? byPk.get(pk) : undefined);
 export const delegateByAddress = (a: string | undefined | null) => (a ? byAddress.get(a) : undefined);
 export const delegateByName = (n: string) => byName.get(n.toLowerCase());
-/** Delegate name for an address, if it is one. Reads `dir.version` so templates re-render. */
+/**
+ * Display name for an address: the validator's name, else a known wallet's (exchange or team).
+ * Reads `dir.version` so templates re-render.
+ */
 export function nameOf(address: string | undefined | null): string | undefined {
   void dir.version;
-  return delegateByAddress(address)?.username;
+  return delegateByAddress(address)?.username ?? knownWallet(address)?.name;
 }
 
 const dirKey = () => `${STORE}:delegates`;

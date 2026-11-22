@@ -6,6 +6,7 @@
   import { search } from "../lib/search";
   import { chain } from "../lib/chain";
   import { dir } from "../lib/delegates.svelte";
+  import { known } from "../lib/known.svelte";
   import type { Delegate } from "../lib/types";
 
   let q = $state("");
@@ -24,27 +25,45 @@
   const MAX_SUGGESTIONS = 8;
   let open = $state(false);
   let sel = $state(-1);
+  /** One suggestion: a validator, or a known exchange / ARK team wallet. */
+  interface Suggestion {
+    name: string;
+    address: string;
+    meta: string;
+    cls: string;
+    order: number;
+  }
+  const status = (d: Delegate) => (d.isResigned ? "resigned" : d.rank > 0 && d.rank <= chain.activeDelegates ? "active" : "standby");
   const suggestions = $derived.by(() => {
     const s = q.trim().toLowerCase();
     // addresses, public keys and IDs are not names
-    if (!s || s.length > 20) return [] as Delegate[];
-    const exact: Delegate[] = [];
-    const starts: Delegate[] = [];
-    const contains: Delegate[] = [];
-    for (const d of dir.list) {
-      const name = d.username.toLowerCase();
-      if (name === s) exact.push(d);
-      else if (name.startsWith(s)) starts.push(d);
-      else if (name.includes(s)) contains.push(d);
+    if (!s || s.length > 20) return [] as Suggestion[];
+    const all: Suggestion[] = [
+      ...dir.list.map((d) => ({
+        name: d.username,
+        address: d.address,
+        meta: d.isResigned ? "resigned" : `#${d.rank} · ${status(d)}`,
+        cls: status(d),
+        order: (d.isResigned ? 1e9 : 0) + (d.rank || 1e8),
+      })),
+      ...known.list.map((k) => ({ name: k.name, address: k.address, meta: k.type === "team" ? "ARK team" : "exchange", cls: "known", order: 5e8 })),
+    ];
+    const exact: Suggestion[] = [];
+    const starts: Suggestion[] = [];
+    const contains: Suggestion[] = [];
+    for (const x of all) {
+      const name = x.name.toLowerCase();
+      if (name === s) exact.push(x);
+      else if (name.startsWith(s)) starts.push(x);
+      else if (name.includes(s)) contains.push(x);
     }
-    const byRank = (a: Delegate, b: Delegate) => (a.isResigned ? 1 : 0) - (b.isResigned ? 1 : 0) || (a.rank || 1e9) - (b.rank || 1e9);
-    // the exact name first, then names that start with the text, then names that contain it; by rank
-    return [...exact, ...starts.sort(byRank), ...contains.sort(byRank)].slice(0, MAX_SUGGESTIONS);
+    const by = (a: Suggestion, b: Suggestion) => a.order - b.order || a.name.localeCompare(b.name);
+    // the exact name first, then names that start with the text, then names that contain it
+    return [...exact, ...starts.sort(by), ...contains.sort(by)].slice(0, MAX_SUGGESTIONS);
   });
   const showList = $derived(open && suggestions.length > 0);
-  const status = (d: Delegate) => (d.isResigned ? "resigned" : d.rank > 0 && d.rank <= chain.activeDelegates ? "active" : "standby");
 
-  function pick(d: Delegate) {
+  function pick(d: Suggestion) {
     location.hash = `#/wallet/${d.address}`;
     q = "";
     open = false;
@@ -133,7 +152,7 @@
       {#if err}<span class="err">{err}</span>{/if}
       {#if showList}
         <ul class="suggest" id="search-suggestions" role="listbox">
-          {#each suggestions as d, i (d.publicKey)}
+          {#each suggestions as d, i (d.address)}
             <li role="option" aria-selected={i === sel}>
               <!-- mousedown, not click: the input's blur would close the list before a click lands -->
               <button
@@ -145,8 +164,8 @@
                 }}
                 onmouseenter={() => (sel = i)}
               >
-                <span class="sname">{d.username}</span>
-                <span class="smeta {status(d)}">{d.isResigned ? "resigned" : `#${d.rank} · ${status(d)}`}</span>
+                <span class="sname">{d.name}</span>
+                <span class="smeta {d.cls}">{d.meta}</span>
               </button>
             </li>
           {/each}
@@ -262,6 +281,9 @@
   }
   .smeta.active {
     color: var(--green);
+  }
+  .smeta.known {
+    color: var(--accent);
   }
   .smeta.resigned {
     color: var(--red);
