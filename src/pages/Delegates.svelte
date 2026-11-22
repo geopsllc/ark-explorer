@@ -168,7 +168,7 @@
       <div class="notice" style="border:0">Loading validators…</div>
     {:else}
       <div class="table-wrap" class:no-anchor={mode === "order"}>
-        <table class="dense">
+        <table class="dense" class:rank={mode === "rank"}>
           <thead>
             <tr>
               <th class="right" title={mode === "order" ? "Position in this round" : "Rank"}>#</th>
@@ -199,7 +199,7 @@
                     <a class="trunc" href="#/wallet/{d.address}" title={d.username}>{d.username}</a>
                   </span>
                 </td>
-                <td>
+                <td class="c-round">
                   {#if !st}
                     <span class="faint">–</span>
                   {:else if st.kind === "forged"}
@@ -289,6 +289,15 @@
   }
   .health .sub {
     line-height: 1.25;
+    overflow: visible; /* fixed labels: never cut them */
+  }
+  /* narrow tiles: columns as wide as their labels, spread across the tile */
+  @media (max-width: 420px) {
+    .health {
+      grid-template-columns: repeat(3, auto);
+      justify-content: space-between;
+      column-gap: 6px;
+    }
   }
   .name {
     display: inline-flex;
@@ -321,12 +330,23 @@
       display: none;
     }
   }
+  /* the Round header sits over the middle of its pills */
+  .c-round {
+    text-align: center;
+  }
+  /* phones: Forging View keeps the round pills, Rank View keeps the votes instead */
   @media (max-width: 480px) {
     .c-votes {
       display: none;
     }
+    table.rank .c-votes {
+      display: table-cell;
+    }
+    table.rank .c-round {
+      display: none;
+    }
   }
-  @media (max-width: 360px) {
+  @media (max-width: 371px) {
     .c-missed {
       display: none;
     }
@@ -340,6 +360,11 @@
   @media (max-width: 659px) {
     .name .trunc {
       --trunc: 112px;
+    }
+  }
+  @media (max-width: 400px) {
+    .name .trunc {
+      --trunc: 100px;
     }
   }
   .hdot {
