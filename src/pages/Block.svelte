@@ -8,6 +8,7 @@
   import { live } from "../lib/live.svelte";
   import { loader } from "../lib/loader.svelte";
   import { formatDate, formatInt, ago } from "../lib/format";
+  import { inBlock } from "../lib/txinfo";
   import type { Block, Transaction } from "../lib/types";
 
   let { id }: { id: string } = $props();
@@ -21,7 +22,7 @@
         txs.push(...(body.data as Transaction[]));
         if (body.data.length < 100) break;
       }
-      txs.forEach((t) => (t.height = block.height));
+      inBlock(txs, block);
     }
     return { block, txs };
   });

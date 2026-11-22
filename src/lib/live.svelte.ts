@@ -16,6 +16,7 @@ import { ApiError, get, RateLimitError } from "./api";
 import { STORE } from "./site";
 import { chain, roundOf, roundOrder, roundStart, slotAt, slotOf, slotStartMs } from "./chain";
 import { load, remove, save } from "./storage";
+import { inBlock } from "./txinfo";
 import type { Block, Transaction } from "./types";
 
 export type LiveStatus = "connecting" | "live" | "delayed" | "offline" | "rate-limited";
@@ -83,10 +84,6 @@ function noteArrival(b: Block) {
 let lastEmpty = { height: 0, at: 0 };
 
 // ---------- applying blocks ----------
-function txsFrom(block: Block, txs: Transaction[]) {
-  for (const t of txs) t.height = block.height;
-  return txs;
-}
 
 async function fetchBlockTxs(b: Block, priority: "live" | "interactive"): Promise<Transaction[]> {
   if (!b.transactions) return [];
@@ -96,7 +93,7 @@ async function fetchBlockTxs(b: Block, priority: "live" | "interactive"): Promis
     out.push(...(body.data as Transaction[]));
     if ((body.data as any[]).length < 100) break;
   }
-  return txsFrom(b, out);
+  return inBlock(out, b);
 }
 
 function applyBlocks(blocks: Block[], txs: Transaction[], notify = true) {

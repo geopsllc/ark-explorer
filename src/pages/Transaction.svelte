@@ -66,8 +66,10 @@
         {#if !pending}
           <div class="k">Block</div>
           <div>{#if t.height}<a href="#/block/{t.height}">#{formatInt(t.height)}</a>{/if} <a class="mono faint break" href="#/block/{t.blockId}">{t.blockId}</a></div>
-          <div class="k">Time</div>
-          <div>{formatDate(t.timestamp.unix)} <span class="faint">({ago(t.timestamp.unix, live.now)})</span></div>
+          {#if t.timestamp}
+            <div class="k">Time</div>
+            <div>{formatDate(t.timestamp.unix)} <span class="faint">({ago(t.timestamp.unix, live.now)})</span></div>
+          {/if}
         {/if}
         <div class="k">Type</div>
         <div>{txTypeName(t)}</div>

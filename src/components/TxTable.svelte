@@ -34,7 +34,7 @@
         {@const amt = me ? txAmountFor(t, me) : txAmount(t)}
         <tr class:flash={flashNew && t.height === live.tip?.height}>
           <td class="nowrap"><a class="mono" href="#/transaction/{t.id}" title={t.id}><span class="id-long">{shortAddress(t.id, 6)}</span><span class="id-short">{shortAddress(t.id, 4)}</span></a><span class="t-typeinline faint"> · {txTypeName(t)}</span></td>
-          <td class="muted t-age"><span class="wide-only">{ago(t.timestamp.unix, live.now)}</span><span class="narrow-only">{agoShort(t.timestamp.unix, live.now)}</span></td>
+          <td class="muted t-age">{#if t.timestamp}<span class="wide-only">{ago(t.timestamp.unix, live.now)}</span><span class="narrow-only">{agoShort(t.timestamp.unix, live.now)}</span>{:else}<span class="faint">–</span>{/if}</td>
           <td class="t-type">
             <span class="trunc" style="--trunc:230px">{txTypeName(t)}
             {#if t.typeGroup === 1 && t.type === 3}

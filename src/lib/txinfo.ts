@@ -1,4 +1,4 @@
-import type { Transaction } from "./types";
+import type { Block, Transaction } from "./types";
 
 /** Human name of a transaction type (Core v3 type groups 1 and 2). */
 export function txTypeName(t: Pick<Transaction, "type" | "typeGroup" | "asset">): string {
@@ -59,4 +59,17 @@ export function txVotes(t: Transaction): { sign: "+" | "-"; publicKey: string }[
 export function involves(t: Transaction, address: string): boolean {
   if (t.sender === address || t.recipient === address) return true;
   return ((t.asset?.payments ?? []) as { recipientId: string }[]).some((p) => p.recipientId === address);
+}
+
+/**
+ * Transactions read through /blocks/{id}/transactions come without `timestamp` (and with
+ * confirmations 0), unlike /transactions. A transaction's time is its block's time, so fill both
+ * from the block.
+ */
+export function inBlock(txs: Transaction[], block: Block): Transaction[] {
+  for (const t of txs) {
+    t.height = block.height;
+    t.timestamp ??= block.timestamp;
+  }
+  return txs;
 }
