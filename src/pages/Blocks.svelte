@@ -6,7 +6,7 @@
   import { live } from "../lib/live.svelte";
   import { loader } from "../lib/loader.svelte";
   import { route, setQuery } from "../lib/router.svelte";
-  import { ago, arkCompact, formatInt } from "../lib/format";
+  import { ago, agoShort, arkCompact, formatInt } from "../lib/format";
   import type { Block } from "../lib/types";
 
   const SIZE = 25;
@@ -71,22 +71,22 @@
             <th>Height</th>
             <th>Age</th>
             <th>Forged by</th>
-            <th class="right">Transactions</th>
-            <th class="right">Amount</th>
-            <th class="right">Fees</th>
-            <th class="right">Reward</th>
+            <th class="right"><span class="wide-only">Transactions</span><span class="narrow-only">Txs</span></th>
+            <th class="right b-amount">Amount</th>
+            <th class="right b-fees">Fees</th>
+            <th class="right b-reward">Reward</th>
           </tr>
         </thead>
         <tbody>
           {#each rows as b (b.id)}
             <tr class:flash={page === 1 && b.height === live.tip?.height}>
               <td><a href="#/block/{b.height}">{formatInt(b.height)}</a></td>
-              <td class="muted">{ago(b.timestamp.unix, live.now)}</td>
-              <td><Addr address={b.generator.address} /></td>
+              <td class="muted"><span class="wide-only">{ago(b.timestamp.unix, live.now)}</span><span class="narrow-only">{agoShort(b.timestamp.unix, live.now)}</span></td>
+              <td><span class="trunc forger" style="--trunc:150px"><Addr address={b.generator.address} /></span></td>
               <td class="right" class:faint={!b.transactions}>{b.transactions}</td>
-              <td class="right">{arkCompact(b.forged.amount)}</td>
-              <td class="right muted">{arkCompact(b.forged.fee)}</td>
-              <td class="right muted">{arkCompact(b.forged.reward)}</td>
+              <td class="right b-amount">{arkCompact(b.forged.amount)}</td>
+              <td class="right muted b-fees">{arkCompact(b.forged.fee)}</td>
+              <td class="right muted b-reward">{arkCompact(b.forged.reward)}</td>
             </tr>
           {:else}
             <tr><td colspan="7" class="muted">{l.state.loading || !live.tip ? "Loading…" : "No blocks."}</td></tr>
@@ -97,3 +97,27 @@
     {#if live.tip}<Pager {page} {pages} onpage={goPage} />{/if}
   </div>
 </div>
+
+<style>
+  /* columns drop out least-important first (natural table width ~690px) */
+  @media (max-width: 770px) {
+    .b-reward {
+      display: none;
+    }
+  }
+  @media (max-width: 640px) {
+    .b-fees {
+      display: none;
+    }
+  }
+  @media (max-width: 520px) {
+    .b-amount {
+      display: none;
+    }
+  }
+  @media (max-width: 420px) {
+    .forger {
+      --trunc: 96px !important;
+    }
+  }
+</style>

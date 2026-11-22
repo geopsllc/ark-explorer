@@ -189,7 +189,7 @@
         <div class="seg">
           {#each tabs as t}
             <button class:on={tab === t.key} onclick={() => setQuery({ tab: t.key === "all" ? undefined : t.key, page: undefined })}>
-              {t.label}{#if totals[t.key] !== undefined} <span class="faint">{formatInt(totals[t.key])}</span>{/if}
+              {t.label}{#if totals[t.key] !== undefined}<span class="faint hide-xs"> {formatInt(totals[t.key])}</span>{/if}
             </button>
           {/each}
         </div>
@@ -201,7 +201,7 @@
       {:else if tab === "voters"}
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Voter</th><th class="right">Balance</th><th class="right">Share of votes</th></tr></thead>
+            <thead><tr><th>Voter</th><th class="right">Balance</th><th class="right"><span class="wide-only">Share of votes</span><span class="narrow-only" title="Share of votes">%</span></th></tr></thead>
             <tbody>
               {#each list.state.data?.voters ?? [] as v (v.address)}
                 <tr>

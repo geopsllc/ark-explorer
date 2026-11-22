@@ -74,12 +74,11 @@ export function utf8Length(s: string): number {
   return new TextEncoder().encode(s).length;
 }
 
-/** Seconds -> "in 12 s" / "in 3 min". */
+/** Milliseconds -> "12s" / "3m 05s". */
 export function countdown(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000));
-  if (s < 60) return `${s} s`;
-  const m = Math.floor(s / 60);
-  return `${m} min ${String(s % 60).padStart(2, "0")} s`;
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
 }
 
 /** "12 s ago" style for recent events, falling back to timeAgo. */
@@ -99,4 +98,13 @@ export function arkCompact(value: string | bigint | null | undefined): string {
   if (n >= 1000) return Math.round(n).toLocaleString("en-US");
   if (n >= 1) return n.toLocaleString("en-US", { maximumFractionDigits: 2 });
   return formatArk(value, 8, 0);
+}
+
+/** Shortest age: "45s", "8m", "3h", "2d". */
+export function agoShort(unixSeconds: number, nowMs = Date.now()): string {
+  const d = Math.max(0, Math.round(nowMs / 1000 - unixSeconds));
+  if (d < 60) return `${d}s`;
+  if (d < 3600) return `${Math.floor(d / 60)}m`;
+  if (d < 86400) return `${Math.floor(d / 3600)}h`;
+  return `${Math.floor(d / 86400)}d`;
 }

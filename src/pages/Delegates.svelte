@@ -3,7 +3,7 @@
   import { chain, slotAt, slotOf, slotStartMs } from "../lib/chain";
   import { live } from "../lib/live.svelte";
   import { dir, missed, missedSinceLastBlock, wantVoters } from "../lib/delegates.svelte";
-  import { ago, arkCompact, countdown, formatInt } from "../lib/format";
+  import { ago, agoShort, arkCompact, countdown, formatInt } from "../lib/format";
   import { load, save } from "../lib/storage";
   import type { Delegate } from "../lib/types";
 
@@ -172,27 +172,26 @@
         </div>
         <input class="text" placeholder="Filter by name" bind:value={filter} aria-label="Filter delegates" />
       {:else}
-        <h2>Round {live.round ? formatInt(live.round.number) : ""} forging order</h2>
-        <span class="muted">Each slot is {chain.blocktime} s · order is reshuffled every round</span>
+        <h2>Round {live.round ? formatInt(live.round.number) : ""}</h2>
       {/if}
     </div>
     {#if !dir.loaded}
       <div class="notice" style="border:0">Loading delegates…</div>
     {:else}
       <div class="table-wrap">
-        <table>
+        <table class="dense">
           <thead>
             <tr>
-              <th>{mode === "order" ? "Order" : "Rank"}</th>
+              <th class="right" title={mode === "order" ? "Position in this round" : "Rank"}>#</th>
               <th>Delegate</th>
-              <th>This round</th>
-              {#if mode === "order"}<th>Rank</th>{/if}
-              <th class="right">Votes ({TOKEN})</th>
-              <th class="right">%</th>
-              <th class="right" title="Voters holding at least 1 {TOKEN}">Voters</th>
-              <th class="right">Produced</th>
-              <th class="right" title="Missed slots in the last {missed.windowHours} hours">Missed {missed.windowHours}h</th>
-              <th class="right">Last block</th>
+              <th>Round</th>
+              {#if mode === "order"}<th class="right c-rank">Rank</th>{/if}
+              <th class="right c-votes" title="Votes ({TOKEN})">Votes</th>
+              <th class="right c-pct">%</th>
+              <th class="right c-voters" title="Voters holding at least 1 {TOKEN}">Voters</th>
+              <th class="right c-blocks" title="Blocks produced">Blocks</th>
+              <th class="right c-missed" title="Missed slots in the last {missed.windowHours} hours">Missed</th>
+              <th class="right c-last" title="Time since the last forged block">Last</th>
             </tr>
           </thead>
           <tbody>
@@ -204,38 +203,38 @@
                 class:flash={st?.kind === "forged" && st.height === live.tip?.height}
                 class:dim={mode === "order" && st?.kind === "forged"}
               >
-                <td class="num faint">{pos || "–"}</td>
+                <td class="num faint right">{pos || "–"}</td>
                 <td>
                   <span class="name">
                     {#if h}<span class="hdot {h}" title={h === "forging" ? "Forging" : h === "missed" ? "Missed last slot" : "Not forging"}></span>{/if}
-                    <a href="#/wallet/{d.address}">{d.username}</a>
+                    <a class="trunc" href="#/wallet/{d.address}" title={d.username}>{d.username}</a>
                   </span>
                 </td>
                 <td>
                   {#if !st}
-                    <span class="faint">{d.isResigned ? "Resigned" : "Standby"}</span>
+                    <span class="faint">–</span>
                   {:else if st.kind === "forged"}
-                    <span class="pill green">Forged <a href="#/block/{st.height}">#{formatInt(st.height)}</a></span>
+                    <a class="pill green" href="#/block/{st.height}" title="Forged block #{formatInt(st.height)}">{formatInt(st.height)}</a>
                   {:else if st.kind === "forging"}
-                    <span class="pill accent"><span class="dot pulse"></span>Forging now</span>
+                    <span class="pill accent" title="Forging now"><span class="dot pulse"></span>Now</span>
                   {:else if st.kind === "late"}
-                    <span class="pill warn"><span class="dot pulse"></span>Waiting</span>
+                    <span class="pill warn" title="Slot passed, block not seen yet"><span class="dot pulse"></span>Late</span>
                   {:else if st.kind === "missed"}
                     <span class="pill red">Missed</span>
                   {:else}
-                    <span class="pill" class:accent={st.next}>{st.next ? "Next" : "Pending"} · {countdown(st.eta)}</span>
+                    <span class="pill" class:accent={st.next} title={st.next ? "Forges next" : "Time until its slot"}>{countdown(st.eta)}</span>
                   {/if}
                 </td>
-                {#if mode === "order"}<td class="num muted">{d.rank}</td>{/if}
-                <td class="right">{arkCompact(d.votes)}</td>
-                <td class="right muted">{pct(d)}</td>
-                <td class="right">{dir.voters[d.publicKey] !== undefined ? formatInt(dir.voters[d.publicKey]) : ""}{#if dir.voters[d.publicKey] === undefined}<span class="skeleton" style="width:30px"></span>{/if}</td>
-                <td class="right">{formatInt(d.blocks.produced)}</td>
-                <td class="right" class:warn={(missed.counts[d.publicKey] ?? 0) > 0}>{missed.progress > 0 ? (missed.counts[d.publicKey] ?? 0) : ""}</td>
-                <td class="right">
+                {#if mode === "order"}<td class="num muted right c-rank">{d.rank}</td>{/if}
+                <td class="right c-votes">{arkCompact(d.votes)}</td>
+                <td class="right muted c-pct">{pct(d)}</td>
+                <td class="right c-voters">{dir.voters[d.publicKey] !== undefined ? formatInt(dir.voters[d.publicKey]) : ""}{#if dir.voters[d.publicKey] === undefined}<span class="skeleton" style="width:30px"></span>{/if}</td>
+                <td class="right c-blocks">{formatInt(d.blocks.produced)}</td>
+                <td class="right c-missed" class:warn={(missed.counts[d.publicKey] ?? 0) > 0}>{missed.progress > 0 ? (missed.counts[d.publicKey] ?? 0) : ""}</td>
+                <td class="right c-last">
                   {#if d.blocks.last}
-                    <a href="#/block/{d.blocks.last.height}" title="#{formatInt(d.blocks.last.height)}">{ago(d.blocks.last.timestamp.unix, live.now)}</a>
-                  {:else}<span class="faint">never</span>{/if}
+                    <a href="#/block/{d.blocks.last.height}" title="#{formatInt(d.blocks.last.height)} · {ago(d.blocks.last.timestamp.unix, live.now)}">{agoShort(d.blocks.last.timestamp.unix, live.now)}</a>
+                  {:else}<span class="faint">–</span>{/if}
                 </td>
               </tr>
             {:else}
@@ -253,12 +252,6 @@
       {/if}
     {/if}
   </div>
-  {#if !missed.ready}
-    <p class="faint small">
-      Missed blocks are worked out from gaps between block timestamps over the last {missed.windowHours} hours. The first visit
-      scans them in the background ({Math.round(missed.progress * 100)}% done); after that only new blocks are checked.
-    </p>
-  {/if}
 </div>
 
 <style>
@@ -270,6 +263,50 @@
     display: inline-flex;
     align-items: center;
     gap: 8px;
+  }
+  /* columns drop out least-important first; breakpoints from the measured natural widths */
+  @media (max-width: 905px) {
+    .c-rank {
+      display: none;
+    }
+  }
+  @media (max-width: 840px) {
+    .c-pct {
+      display: none;
+    }
+  }
+  @media (max-width: 770px) {
+    .c-voters {
+      display: none;
+    }
+  }
+  @media (max-width: 690px) {
+    .c-blocks {
+      display: none;
+    }
+  }
+  @media (max-width: 560px) {
+    .c-last {
+      display: none;
+    }
+  }
+  @media (max-width: 480px) {
+    .c-votes {
+      display: none;
+    }
+  }
+  @media (max-width: 360px) {
+    .c-missed {
+      display: none;
+    }
+  }
+  .name .trunc {
+    --trunc: 170px;
+  }
+  @media (max-width: 659px) {
+    .name .trunc {
+      --trunc: 112px;
+    }
   }
   .hdot {
     width: 8px;
@@ -284,8 +321,9 @@
   .hdot.not-forging {
     background: var(--red);
   }
-  .pill a {
-    color: inherit;
+  a.pill:hover {
+    text-decoration: none;
+    filter: brightness(1.15);
   }
   .pager {
     display: flex;
@@ -294,10 +332,6 @@
     justify-content: center;
     padding: 12px;
     border-top: 1px solid var(--border);
-  }
-  .small {
-    font-size: 12px;
-    margin-top: 10px;
   }
   .card-head input {
     width: 220px;
