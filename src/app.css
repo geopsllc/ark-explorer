@@ -179,6 +179,10 @@ select {
   color: var(--muted);
   font-size: 12px;
   margin-top: 2px;
+  /* live text must never wrap: a second line would resize the whole tile row */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* tables */

@@ -151,7 +151,7 @@
     <div class="stat">
       <div class="label">Forging now</div>
       <div class="value"><a href="#/wallet/{forgingNow?.address}">{forgingNow?.username ?? "…"}</a></div>
-      <div class="sub">next: {nextUp?.username ?? "…"} in {countdown(slotLeft)}</div>
+      <div class="sub next" title={nextUp?.username}><span>next:</span><span class="nname">{nextUp?.username ?? "…"}</span><span>in {countdown(slotLeft)}</span></div>
     </div>
     <div class="stat">
       <div class="label">Forging status</div>
@@ -268,6 +268,17 @@
 </div>
 
 <style>
+  /* one line whatever the name: a long name is cut, the countdown stays (a wrap would make the tile row jump) */
+  .sub.next {
+    display: flex;
+    gap: 0.3em;
+    white-space: nowrap;
+  }
+  .nname {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
   /* the tabs and filter fit in the same 52 px as the Forging View title */
   .card-head.tight {
     padding-top: 6.5px;
