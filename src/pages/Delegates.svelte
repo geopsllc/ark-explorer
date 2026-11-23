@@ -101,7 +101,7 @@
   <div class="page-head">
     <div>
       <h1>Validators</h1>
-      <p>Live forging monitor</p>
+      <p>Live Monitor</p>
     </div>
     {#if live.supply !== null}
       <span class="pill supply" title="Total supply, updated with every block">Supply <b class="num">{arkCompact(live.supply)}<Sym /></b></span>
