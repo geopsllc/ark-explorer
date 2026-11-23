@@ -98,7 +98,7 @@
 </script>
 
 <div class="page">
-  <div class="page-head">
+  <div class="page-head head3">
     <div>
       <h1>Validators</h1>
       <p>Live Monitor</p>
@@ -244,6 +244,24 @@
 </div>
 
 <style>
+  /* wide enough: three columns with equal sides, so the supply pill sits in the middle of the whole
+     row (not of the space left between title and switch); narrower, the usual wrapping head */
+  @media (min-width: 620px) {
+    .head3 {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+    }
+    .head3 > :first-child {
+      grid-column: 1;
+    }
+    .head3 > .supply {
+      grid-column: 2;
+    }
+    .head3 > .seg {
+      grid-column: 3;
+      justify-self: end;
+    }
+  }
   .times {
     margin-left: 4px;
     opacity: 0.75;
