@@ -14,7 +14,7 @@
 # Reward-sharing data (hidden #/shares page): every 6 hours the schedule crawls api.ark.io with
 # tools/ark-share/analyzer.py (~760 requests, ~5 min) and deploys the result as /shares.json.
 # Pushes and pull requests reuse the live /shares.json instead of crawling, unless a push
-# changes tools/ark-share. If a crawl fails or looks wrong (fewer than 5 sharing delegates),
+# changes tools/ark-share or this workflow. If a crawl fails or looks wrong (fewer than 5 sharing delegates),
 # the live file is kept. Nothing is committed.
 name: Deploy
 
@@ -24,7 +24,7 @@ on:
   pull_request:
   workflow_dispatch:
   schedule:
-    - cron: "17 */6 * * *"
+    - cron: "41 */6 * * *"
 
 permissions:
   contents: read
@@ -57,8 +57,8 @@ jobs:
         run: |
           # a push that changes the analyzer re-crawls, so the page never shows the old logic's output
           if [ "$FRESH" != "true" ] && [ "${{ github.event_name }}" = "push" ] && [ -n "$BEFORE" ] &&
-             ! git diff --quiet "$BEFORE" HEAD -- tools/ark-share 2>/dev/null; then
-            FRESH=true; echo "tools/ark-share changed: crawling"
+             ! git diff --quiet "$BEFORE" HEAD -- tools/ark-share .github/workflows/deploy.yml 2>/dev/null; then
+            FRESH=true; echo "crawler or workflow changed: crawling"
           fi
           live="https://$CUSTOM_DOMAIN/shares.json"
           [ "$CUSTOM_DOMAIN" = "none" ] && live="https://$PAGES_PROJECT.pages.dev/shares.json"
