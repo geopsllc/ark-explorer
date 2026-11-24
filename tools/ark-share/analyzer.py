@@ -430,7 +430,8 @@ def analyze(delegate, voters, runs_window, boundary_run, forged, now, payer=None
     med_gap = statistics.median(gaps_h)
     res = {
         "username": delegate["username"], "address": addr, "rank": delegate["rank"],
-        "votes": V / SATOSHI, "voters": len(voters), "payer": payer or addr,
+        "votes": int(delegate["votes"]) / SATOSHI, "votes_window": V / SATOSHI,
+        "voters": len(voters), "payer": payer or addr,
         "window": {"from": times[0], "to": times[-1], "runs": n_runs,
                    "hours": round((times[-1] - times[0]) / 3600, 1)},
         "schedule": {
@@ -882,7 +883,7 @@ def page_json(results, now, reward):
             "status": r["status"],
             "share": r["share_pct"], "shareRaw": r["share_raw_pct"], "confidence": r["confidence"],
             "effective": r["effective_pct"], "operator": r["operator_pct"], "kept": r["kept_pct"],
-            "votes": r["votes"], "voters": r["voters"], "votersPaid": r["voters_paid"],
+            "votes": r["votes"], "votesWindow": r.get("votes_window"), "voters": r["voters"], "votersPaid": r["voters_paid"],
             "forgedPerDay": round(r["forged"]["ark"] / hours * 24, 2),
             "intervalH": s["median_interval_h"], "payoutsPerDay": s["payouts_per_day"],
             "lastPayout": now - int(s["last_payout_h_ago"] * 3600),

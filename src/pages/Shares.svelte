@@ -14,7 +14,7 @@
     rank: number; username: string; address: string; payer: string | null;
     status: "sharing" | "irregular" | "stopped";
     share: number; shareRaw: number; confidence: number; effective: number; operator: number; kept: number;
-    votes: number; voters: number; votersPaid: number; forgedPerDay: number;
+    votes: number; votesWindow?: number | null; voters: number; votersPaid: number; forgedPerDay: number;
     intervalH: number; payoutsPerDay: number; lastPayout: number;
     delayH: number | null; firstPayoutH: number | null; capArk: number | null; minArk: number | null;
     perRun: number[]; window: { from: number; to: number; runs: number };
@@ -53,7 +53,21 @@
       return;
     }
     checkLastPayouts();
+    checkVotes();
   });
+
+  // Votes change between crawls (a big voter moving shifts everyone's cut), so the calculator uses
+  // the live vote totals: one request for all active delegates.
+  let liveVotes = $state<Record<string, number>>({});
+  async function checkVotes() {
+    try {
+      const body = await get(`/delegates?limit=100`, "background");
+      for (const v of body.data ?? []) liveVotes[v.address] = Number(v.votes) / 1e8;
+    } catch {
+      /* keep the crawl's value */
+    }
+  }
+  const votesOf = (d: Row) => liveVotes[d.address] ?? d.votes;
 
   // The crawl runs every 12 hours; the latest payout is checked live (one request per delegate)
   // so "Last" and "gone dark" are current.
@@ -93,7 +107,7 @@
     if (!x) return { day: null };
     if (d.minArk && x < d.minArk) return { day: 0, note: `below the ~${formatInt(Math.round(d.minArk))} Ѧ minimum` };
     const w = d.capArk ? Math.min(x, d.capArk) : x;
-    return { day: ((d.shareRaw / 100) * d.forgedPerDay * w) / (d.votes + x), note: d.capArk && x > d.capArk ? `capped at ~${formatInt(d.capArk)} Ѧ` : undefined };
+    return { day: ((d.shareRaw / 100) * d.forgedPerDay * w) / (votesOf(d) + x), note: d.capArk && x > d.capArk ? `capped at ~${formatInt(d.capArk)} Ѧ` : undefined };
   }
 
   const rows = $derived.by(() => {
@@ -103,7 +117,7 @@
       switch (sort) {
         case "reward": return x.r.day ?? -1;
         case "share": return isDark(x.d) ? -1 : x.d.shareRaw;
-        case "votes": return x.d.votes;
+        case "votes": return votesOf(x.d);
         case "voters": return x.d.voters;
         case "rank": return x.d.rank;
         case "last": return lastOf(x.d);
@@ -227,7 +241,7 @@
                 <td class="muted hide-md">{schedule(d)}</td>
                 <td class="right muted hide-md" title={d.delayH !== null ? `Pays ${delayDays(d) ? delayDays(d) + " day(s) behind" : "with no delay"} (measured ${d.delayH} h), every ~${nominalInterval(d.intervalH)} h` : `No new voter to measure from: assumed no delay, every ~${nominalInterval(d.intervalH)} h`}>{within(firstPayoutMax(d))}</td>
                 <td class="right hide-lg">{formatInt(d.votersPaid)}<span class="faint">/{formatInt(d.voters)}</span></td>
-                <td class="right hide-lg">{compact(d.votes)}<Sym /></td>
+                <td class="right hide-lg">{compact(votesOf(d))}<Sym /></td>
                 <td class="right hide-xs" class:red={isDark(d)} title={liveLast[d.address] ? "Checked live" : "From the last crawl"}>{agoShort(lastOf(d), now)}</td>
               </tr>
               {#if open === d.address}
@@ -286,7 +300,7 @@
       </div>
     </div>
     <p class="foot faint">
-      Estimates assume the delegate keeps its current share, votes and forging rate, and that your vote is added to its current votes.
+      Estimates assume the delegate keeps its current share, votes and forging rate, and that your vote is added to its current votes (checked live).
       Shares are rounded down to a whole percent. Delegates with fewer than 20 voters, paying by single transfers, or paying more often than
       every 6 hours are treated as private pools and left out, as are delegates sharing less than 50% or paying less often than daily.
       The last payout is checked live; everything else comes from the crawl every 12 hours.
