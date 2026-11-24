@@ -119,7 +119,7 @@
       <div class="stat">
         <div class="label">Sharing delegates</div>
         <div class="value">{paying.length}</div>
-        <div class="sub">of the 51 active</div>
+        <div class="sub">public, 50% or more</div>
       </div>
       <div class="stat">
         <div class="label">Median share</div>
@@ -253,8 +253,8 @@
     </div>
     <p class="foot faint">
       Estimates assume the delegate keeps its current share, votes and forging rate, and that your vote is added to its current votes.
-      Shares are rounded down to a whole percent. Delegates with 5 or fewer voters, paying by single transfers, or paying more often than
-      every 6 hours are treated as private and left out.
+      Shares are rounded down to a whole percent. Delegates with fewer than 20 voters, paying by single transfers, or paying more often than
+      every 6 hours are treated as private pools and left out, as are delegates sharing less than 50%.
     </p>
   {/if}
 </div>

@@ -86,7 +86,8 @@ MIN_RUNS = 3
 MAX_RUNS = 21               # window cap: every interval gets its own block count
 LOOKBACK_DAYS = 30
 MIN_VOTER_BALANCE = SATOSHI  # voters below 1 ARK are ignored (ArkScan counts the same way)
-PRIVATE_MAX_VOTERS = 5      # <= this many voters: likely the operator's own wallets
+PRIVATE_MAX_VOTERS = 19     # <= this many voters (>= 1 ARK): a private pool (a closed group, or the
+                            # operator's own wallets), not a public one. Public pools have 20+.
 FREQUENT_H = 6              # public pools pay daily or a few times a day; more often is unusual
 IN_PROGRESS = 5 * 60        # a run whose last tx is younger than this may still be sending
 SHARE_TOLERANCE = 0.3       # % of noise allowed before rounding the share down to a whole percent
@@ -628,16 +629,17 @@ def classify(res, med_gap):
     if res["transfers_only"]:
         flags.append("pays voters with single transfers, not multipayments: not a public pool")
     if res["voters"] <= PRIVATE_MAX_VOTERS:
-        flags.append(f"<= {PRIVATE_MAX_VOTERS} voters: likely the operator's own wallets")
+        flags.append(f"fewer than {PRIVATE_MAX_VOTERS + 1} voters: a private pool (closed group "
+                     f"or the operator's own wallets)")
 
     if res["voters_paid"] == 0 or not res["voters_measured"] or \
             (res["voters_paid"] < 3 and not private):
         return "not sharing", flags
+    if private:                         # never shown, not even as gone dark
+        return "private", flags
     stale_after = max(48, 3 * med_gap)
     if s["last_payout_h_ago"] > stale_after:
         return "stopped", flags
-    if private:
-        return "private", flags
     if res["confidence"] is not None and res["confidence"] < 0.5:
         return "irregular", flags
     return "sharing", flags
@@ -762,7 +764,7 @@ def analyze_delegate(c, delegate, now, reward, votes=None):
             "votes": int(delegate["votes"]) / SATOSHI, "voters": len(voters),
             "status": "not sharing", "share_pct": None,
             "flags": [f"last payout {days:.0f} days ago" if days else "never paid out"]
-            + ([f"<= {PRIVATE_MAX_VOTERS} voters"] if len(voters) <= PRIVATE_MAX_VOTERS else []),
+            + ([f"fewer than {PRIVATE_MAX_VOTERS + 1} voters"] if len(voters) <= PRIVATE_MAX_VOTERS else []),
             "schedule": {"last_payout_h_ago": round(days * 24, 1) if days else None}}
 
 
@@ -812,14 +814,16 @@ def main():
 
 
 PAGE_STATUSES = ("sharing", "irregular", "stopped")
+PAGE_MIN_SHARE = 50         # the page lists public pools that share at least this much (rounded share)
 
 
 def page_json(results, now, reward):
-    """What the explorer's shares page needs: public sharing delegates, plus ones that stopped
-    paying within the lookback (gone dark). Private and never-sharing delegates are left out."""
+    """What the explorer's shares page needs: public sharing delegates that share at least
+    PAGE_MIN_SHARE, plus such delegates that stopped paying within the lookback (gone dark).
+    Private, low-share and never-sharing delegates are left out."""
     out = []
     for r in results:
-        if r.get("status") not in PAGE_STATUSES:
+        if r.get("status") not in PAGE_STATUSES or (r.get("share_pct") or 0) < PAGE_MIN_SHARE:
             continue
         s, w = r["schedule"], r["window"]
         hours = w["hours"] or 1
