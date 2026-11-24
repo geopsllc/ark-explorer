@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Hidden page (#/shares, or type "shares" in search): what sharing delegates really pay voters.
+  // Hidden page (#/shares, or type "shares" in search): what sharing validators really pay voters.
   // Data is /shares.json, made every 12 hours by tools/ark-share in the deploy workflow; this page
   // sends no API requests of its own.
   import { onMount, untrack } from "svelte";
@@ -101,7 +101,7 @@
   const within = (h: number) => (h < 24 ? `≤ ${Math.round(h)} h` : `≤ ${Math.round(h / 24)} d`);
 
   /** Daily reward for voting `x` ARK: share × forged/day × your weight / (votes + your vote).
-   *  Minimum and maximum voting weights apply; gone-dark delegates pay nothing. */
+   *  Minimum and maximum voting weights apply; gone-dark validators pay nothing. */
   function reward(d: Row, x: number): { day: number | null; note?: string } {
     if (isDark(d)) return { day: null, note: "not paying" };
     if (!x) return { day: null };
@@ -153,9 +153,9 @@
   <div class="page-head">
     <div>
       <h1>Reward Sharing</h1>
-      <p>What delegates really pay their voters, measured from their payouts</p>
+      <p>What validators really pay their voters, measured from their payouts</p>
     </div>
-    {#if data}<span class="pill" title="Measured over each delegate's last 7 days of payouts">Updated {ago(data.generated, now)}</span>{/if}
+    {#if data}<span class="pill" title="Measured over each validator's last 7 days of payouts">Updated {ago(data.generated, now)}</span>{/if}
   </div>
 
   {#if error}
@@ -165,7 +165,7 @@
   {:else}
     <div class="stats">
       <div class="stat">
-        <div class="label">Sharing delegates</div>
+        <div class="label">Sharing validators</div>
         <div class="value">{paying.length}</div>
         <div class="sub">public, 50% or more</div>
       </div>
@@ -206,7 +206,7 @@
           <thead>
             <tr>
               <th class="right sort" onclick={() => sortBy("rank")} aria-sort={sort === "rank" ? (desc ? "descending" : "ascending") : undefined}>#</th>
-              <th>Delegate</th>
+              <th>Validator</th>
               <th class="right sort" onclick={() => sortBy("share")} title="What a paid voter receives, as a share of their proportional cut of everything forged">Share{sort === "share" ? (desc ? " ↓" : " ↑") : ""}</th>
               <th class="right sort" onclick={() => sortBy("reward")} title="Estimated reward for voting the amount above">Per day{sort === "reward" ? (desc ? " ↓" : " ↑") : ""}</th>
               <th class="right hide-sm" title="Yearly return of the daily reward, not compounded">APR</th>
@@ -293,16 +293,16 @@
                 </tr>
               {/if}
             {:else}
-              <tr><td colspan="10" class="muted">No sharing delegates found.</td></tr>
+              <tr><td colspan="10" class="muted">No sharing validators found.</td></tr>
             {/each}
           </tbody>
         </table>
       </div>
     </div>
     <p class="foot faint">
-      Estimates assume the delegate keeps its current share, votes and forging rate, and that your vote is added to its current votes (checked live).
-      Shares are rounded down to a whole percent. Delegates with fewer than 20 voters, paying by single transfers, or paying more often than
-      every 6 hours are treated as private pools and left out, as are delegates sharing less than 50% or paying less often than daily.
+      Estimates assume the validator keeps its current share, votes and forging rate, and that your vote is added to its current votes (checked live).
+      Shares are rounded down to a whole percent. Validators with fewer than 20 voters, paying by single transfers, or paying more often than
+      every 6 hours are treated as private pools and left out, as are validators sharing less than 50% or paying less often than daily.
       The last payout is checked live; everything else comes from the crawl every 12 hours.
     </p>
   {/if}
