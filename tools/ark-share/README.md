@@ -24,7 +24,7 @@ The full method is described in the `analyzer.py` docstring. In short:
 | Operator | Large non-voters paid every run; the part of a voter's payout above the share | One or two operator addresses inside the multipayment (del, kaos) |
 | Payout wallet | Follows the main forwarding address, or a sender paying the top voters | Delegates paying from a separate wallet |
 | Delay | New voters (≥ 3 days, still voting): first payout ÷ accrual rate from later payouts | hash pays ~35 h behind forging; first payout ~52 h after voting |
-| Page | Lists sharing, irregular and gone-dark delegates with a share of 50% or more; never private ones | A clean table of real public pools |
+| Page | Lists sharing, irregular and gone-dark delegates with a share of 50% or more that pay at least daily; never private ones | A clean table of real public pools |
 | Status | sharing / private (fewer than 20 voters, transfers only, or pays more often than every 6 h) / stopped / irregular / not sharing | biz_classic: last payout 69 days ago |
 
 **Share** is what a paid voter receives as a percentage of their proportional cut of everything

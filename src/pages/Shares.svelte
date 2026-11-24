@@ -7,6 +7,7 @@
   import Addr from "../components/Addr.svelte";
   import { ago, agoShort, formatInt } from "../lib/format";
   import { route, setQuery } from "../lib/router.svelte";
+  import { get } from "../lib/api";
   import { live } from "../lib/live.svelte";
 
   type Row = {
@@ -25,7 +26,7 @@
   let error = $state("");
   let open = $state<string | null>(null);
 
-  const PRESETS = [1_000, 10_000];
+  const PRESETS = [1_000, 10_000, 100_000];
   let amountText = $state(route.query.amount ?? "1000");
   const amount = $derived(Math.max(0, Number(amountText.replace(/[,\s]/g, "")) || 0));
   // keep the amount in the URL (shareable); only `amount` is tracked, not the route it writes
@@ -49,13 +50,46 @@
       data = await res.json();
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
+      return;
     }
+    checkLastPayouts();
   });
+
+  // The crawl runs every 12 hours; the latest payout is checked live (one request per delegate)
+  // so "Last" and "gone dark" are current.
+  let liveLast = $state<Record<string, number>>({});
+  async function checkLastPayouts() {
+    await Promise.all(
+      (data?.delegates ?? []).map(async (d) => {
+        try {
+          const body = await get(`/wallets/${d.payer ?? d.address}/transactions/sent?typeGroup=1&type=6&orderBy=timestamp:desc&limit=1`, "background");
+          const t = body.data?.[0]?.timestamp?.unix;
+          if (t) liveLast[d.address] = t;
+        } catch {
+          /* keep the crawl's value */
+        }
+      }),
+    );
+  }
+  const lastOf = (d: Row) => Math.max(d.lastPayout, liveLast[d.address] ?? 0);
+  /** gone dark: the crawl said stopped and no payout has shown up since (48 h without one) */
+  const isDark = (d: Row) => d.status === "stopped" && Date.now() / 1000 - lastOf(d) > 48 * 3600;
+
+  // First payout: pools pay for blocks up to the payout (no delay) or a day behind, so the measured
+  // delay is snapped to whole days; unknown counts as no delay. A new voter waits at most the delay
+  // plus one payout interval.
+  function nominalInterval(h: number): number {
+    for (const n of [24, 12, 8, 6]) if (Math.abs(h - n) <= n * 0.17) return n;
+    return h;
+  }
+  const delayDays = (d: Row) => (d.delayH === null || d.delayH < 12 ? 0 : Math.round(d.delayH / 24));
+  const firstPayoutMax = (d: Row) => delayDays(d) * 24 + nominalInterval(d.intervalH);
+  const within = (h: number) => (h < 24 ? `≤ ${Math.round(h)} h` : `≤ ${Math.round(h / 24)} d`);
 
   /** Daily reward for voting `x` ARK: share × forged/day × your weight / (votes + your vote).
    *  Minimum and maximum voting weights apply; gone-dark delegates pay nothing. */
   function reward(d: Row, x: number): { day: number | null; note?: string } {
-    if (d.status === "stopped") return { day: null, note: "not paying" };
+    if (isDark(d)) return { day: null, note: "not paying" };
     if (!x) return { day: null };
     if (d.minArk && x < d.minArk) return { day: 0, note: `below the ~${formatInt(Math.round(d.minArk))} Ѧ minimum` };
     const w = d.capArk ? Math.min(x, d.capArk) : x;
@@ -68,18 +102,18 @@
     const val = (x: (typeof list)[number]): number => {
       switch (sort) {
         case "reward": return x.r.day ?? -1;
-        case "share": return x.d.status === "stopped" ? -1 : x.d.shareRaw;
+        case "share": return isDark(x.d) ? -1 : x.d.shareRaw;
         case "votes": return x.d.votes;
         case "voters": return x.d.voters;
         case "rank": return x.d.rank;
-        case "last": return x.d.lastPayout;
+        case "last": return lastOf(x.d);
       }
     };
     return list.sort((a, b) => (desc ? val(b) - val(a) : val(a) - val(b)) || a.d.rank - b.d.rank);
   });
 
-  const paying = $derived(data ? data.delegates.filter((d) => d.status !== "stopped") : []);
-  const dark = $derived(data ? data.delegates.filter((d) => d.status === "stopped") : []);
+  const paying = $derived(data ? data.delegates.filter((d) => !isDark(d)) : []);
+  const dark = $derived(data ? data.delegates.filter((d) => isDark(d)) : []);
   const medianShare = $derived.by(() => {
     const s = paying.map((d) => d.share).sort((a, b) => a - b);
     return s.length ? s[Math.floor(s.length / 2)] : null;
@@ -163,7 +197,7 @@
               <th class="right sort" onclick={() => sortBy("reward")} title="Estimated reward for voting the amount above">Per day{sort === "reward" ? (desc ? " ↓" : " ↑") : ""}</th>
               <th class="right hide-sm" title="Yearly return of the daily reward, not compounded">APR</th>
               <th class="hide-md">Payouts</th>
-              <th class="right hide-md" title="How long after voting the first payout arrives">First payout</th>
+              <th class="right hide-md" title="Longest wait from voting to the first payout: the payout delay (none or whole days) plus one payout interval">First payout</th>
               <th class="right sort hide-lg" onclick={() => sortBy("voters")} title="Voters paid / voters with at least 1 Ѧ">Voters{sort === "voters" ? (desc ? " ↓" : " ↑") : ""}</th>
               <th class="right sort hide-lg" onclick={() => sortBy("votes")}>Votes{sort === "votes" ? (desc ? " ↓" : " ↑") : ""}</th>
               <th class="right sort hide-xs" onclick={() => sortBy("last")} title="Time since the last payout">Last{sort === "last" ? (desc ? " ↓" : " ↑") : ""}</th>
@@ -171,17 +205,17 @@
           </thead>
           <tbody>
             {#each rows as { d, r } (d.address)}
-              <tr class="row" class:dark={d.status === "stopped"} class:sel={open === d.address} onclick={() => (open = open === d.address ? null : d.address)}>
+              <tr class="row" class:dark={isDark(d)} class:sel={open === d.address} onclick={() => (open = open === d.address ? null : d.address)}>
                 <td class="num faint right">{d.rank}</td>
                 <td>
                   <span class="name">
                     <span class="chev" aria-hidden="true">{open === d.address ? "▾" : "▸"}</span>
                     <a class="trunc" href="#/wallet/{d.address}" onclick={(e) => e.stopPropagation()}>{d.username}</a>
-                    {#if d.status === "stopped"}<span class="pill red" title="Was sharing, no payout for {ago(d.lastPayout, now)}">Gone dark</span>
+                    {#if isDark(d)}<span class="pill red" title="Was sharing, no payout for {ago(lastOf(d), now)}">Gone dark</span>
                     {:else if d.status === "irregular"}<span class="pill warn" title="Payouts don't follow vote weight consistently">Irregular</span>{/if}
                   </span>
                 </td>
-                <td class="right share" class:faint={d.status === "stopped"}>
+                <td class="right share" class:faint={isDark(d)}>
                   {d.share}%{#if d.effective < d.share - 2}<span class="eff" title="Effective: everything paid to voters / everything forged">{Math.round(d.effective)}% eff.</span>{/if}
                 </td>
                 <td class="right">
@@ -191,10 +225,10 @@
                 </td>
                 <td class="right muted hide-sm">{r.day && amount ? ((r.day * 365) / amount * 100).toFixed(1) + "%" : "–"}</td>
                 <td class="muted hide-md">{schedule(d)}</td>
-                <td class="right muted hide-md">{d.firstPayoutH !== null ? hours(d.firstPayoutH) : "–"}</td>
+                <td class="right muted hide-md" title={d.delayH !== null ? `Pays ${delayDays(d) ? delayDays(d) + " day(s) behind" : "with no delay"} (measured ${d.delayH} h), every ~${nominalInterval(d.intervalH)} h` : `No new voter to measure from: assumed no delay, every ~${nominalInterval(d.intervalH)} h`}>{within(firstPayoutMax(d))}</td>
                 <td class="right hide-lg">{formatInt(d.votersPaid)}<span class="faint">/{formatInt(d.voters)}</span></td>
                 <td class="right hide-lg">{compact(d.votes)}<Sym /></td>
-                <td class="right hide-xs" class:red={d.status === "stopped"}>{agoShort(d.lastPayout, now)}</td>
+                <td class="right hide-xs" class:red={isDark(d)} title={liveLast[d.address] ? "Checked live" : "From the last crawl"}>{agoShort(lastOf(d), now)}</td>
               </tr>
               {#if open === d.address}
                 <tr class="details">
@@ -215,8 +249,8 @@
                       </div>
                       <div class="k">Payout delay</div>
                       <div>
-                        {#if d.delayH !== null}{d.delayH < 1 ? "none" : hours(d.delayH)} <span class="faint">· a new voter's first payout after ~{hours(d.firstPayoutH ?? 0)}</span>
-                        {:else}<span class="faint">no recent voter to measure from</span>{/if}
+                        {delayDays(d) ? `${delayDays(d)} day${delayDays(d) > 1 ? "s" : ""}` : "none"}
+                        <span class="faint">· {d.delayH !== null ? `measured ${d.delayH} h` : "no new voter to measure from, assumed none"} · a new voter's first payout {within(firstPayoutMax(d))}</span>
                       </div>
                       {#if d.minArk || d.capArk}
                         <div class="k">Voting weight</div>
@@ -254,7 +288,8 @@
     <p class="foot faint">
       Estimates assume the delegate keeps its current share, votes and forging rate, and that your vote is added to its current votes.
       Shares are rounded down to a whole percent. Delegates with fewer than 20 voters, paying by single transfers, or paying more often than
-      every 6 hours are treated as private pools and left out, as are delegates sharing less than 50%.
+      every 6 hours are treated as private pools and left out, as are delegates sharing less than 50% or paying less often than daily.
+      The last payout is checked live; everything else comes from the crawl every 12 hours.
     </p>
   {/if}
 </div>

@@ -815,15 +815,19 @@ def main():
 
 PAGE_STATUSES = ("sharing", "irregular", "stopped")
 PAGE_MIN_SHARE = 50         # the page lists public pools that share at least this much (rounded share)
+PAGE_MAX_INTERVAL_H = 26    # ...and pay at least daily (24 h plus some slack for timing drift)
 
 
 def page_json(results, now, reward):
     """What the explorer's shares page needs: public sharing delegates that share at least
-    PAGE_MIN_SHARE, plus such delegates that stopped paying within the lookback (gone dark).
+    PAGE_MIN_SHARE and pay at least daily, plus such delegates that stopped paying within the
+    lookback (gone dark).
     Private, low-share and never-sharing delegates are left out."""
     out = []
     for r in results:
         if r.get("status") not in PAGE_STATUSES or (r.get("share_pct") or 0) < PAGE_MIN_SHARE:
+            continue
+        if r["schedule"]["median_interval_h"] > PAGE_MAX_INTERVAL_H:
             continue
         s, w = r["schedule"], r["window"]
         hours = w["hours"] or 1
