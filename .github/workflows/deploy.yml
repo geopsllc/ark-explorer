@@ -11,7 +11,7 @@
 #
 # Without the secrets (e.g. in a fork) the build still runs and the deploy steps are skipped.
 #
-# Reward-sharing data (hidden #/shares page): every 12 hours the schedule crawls api.ark.io with
+# Reward-sharing data (hidden #/shares page): every 6 hours the schedule crawls api.ark.io with
 # tools/ark-share/analyzer.py (~760 requests, ~5 min) and deploys the result as /shares.json.
 # Pushes and pull requests reuse the live /shares.json instead of crawling, unless a push
 # changes tools/ark-share. If a crawl fails or looks wrong (fewer than 5 sharing delegates),
@@ -24,7 +24,7 @@ on:
   pull_request:
   workflow_dispatch:
   schedule:
-    - cron: "17 */12 * * *"
+    - cron: "17 */6 * * *"
 
 permissions:
   contents: read

@@ -1,6 +1,6 @@
 <script lang="ts">
   // Hidden page (#/shares, or type "shares" in search): what sharing validators really pay voters.
-  // Data is /shares.json, made every 12 hours by tools/ark-share in the deploy workflow; this page
+  // Data is /shares.json, made every 6 hours by tools/ark-share in the deploy workflow; this page
   // sends no API requests of its own.
   import { onMount, untrack } from "svelte";
   import Sym from "../components/Sym.svelte";
@@ -69,7 +69,7 @@
   }
   const votesOf = (d: Row) => liveVotes[d.address] ?? d.votes;
 
-  // The crawl runs every 12 hours; the latest payout is checked live (one request per delegate)
+  // The crawl runs every 6 hours; the latest payout is checked live (one request per delegate)
   // so "Last" and "gone dark" are current.
   let liveLast = $state<Record<string, number>>({});
   async function checkLastPayouts() {
@@ -303,7 +303,7 @@
       Estimates assume the validator keeps its current share, votes and forging rate, and that your vote is added to its current votes (checked live).
       Shares are rounded down to a whole percent. Validators with fewer than 20 voters, paying by single transfers, or paying more often than
       every 6 hours are treated as private pools and left out, as are validators sharing less than 50% or paying less often than daily.
-      The last payout is checked live; everything else comes from the crawl every 12 hours.
+      The last payout and vote totals are checked live; everything else comes from the crawl every 6 hours.
     </p>
   {/if}
 </div>
