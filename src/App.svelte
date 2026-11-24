@@ -8,6 +8,7 @@
   import TransactionPage from "./pages/Transaction.svelte";
   import WalletPage from "./pages/Wallet.svelte";
   import Wallets from "./pages/Wallets.svelte";
+  import Shares from "./pages/Shares.svelte";
   import { PRIMARY_API, TITLE } from "./lib/site";
   import { live, startLive } from "./lib/live.svelte";
   import { startDirectory, startMissedScan } from "./lib/delegates.svelte";
@@ -53,6 +54,8 @@
       <Transactions />
     {:else if page === "transaction" && route.parts[1]}
       <TransactionPage id={route.parts[1]} />
+    {:else if page === "shares"}
+      <Shares />
     {:else if page === "wallets"}
       <Wallets />
     {:else if page === "wallet" && route.parts[1]}

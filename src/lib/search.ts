@@ -6,6 +6,8 @@ import { knownByName } from "./known.svelte";
 export async function search(input: string): Promise<string | null> {
   const q = input.trim();
   if (!q) return null;
+  // hidden page: reward sharing (no delegate is registered under this name)
+  if (q.toLowerCase() === "shares") return "#/shares";
   if (/^[A-Za-z0-9]{34}$/.test(q)) return `#/wallet/${q}`;
   if (/^0[23][0-9a-fA-F]{64}$/.test(q)) {
     const d = delegateByPk(q.toLowerCase());

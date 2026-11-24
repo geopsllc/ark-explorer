@@ -10,6 +10,11 @@
 #   CUSTOM_DOMAIN          domain to serve the explorer on (default: ark.geops.net; set to "none" to skip)
 #
 # Without the secrets (e.g. in a fork) the build still runs and the deploy steps are skipped.
+#
+# Reward-sharing data (hidden #/shares page): every 12 hours the schedule crawls api.ark.io with
+# tools/ark-share/analyzer.py (~760 requests, ~5 min) and deploys the result as /shares.json.
+# Pushes and pull requests reuse the live /shares.json instead of crawling. If a crawl fails or
+# looks wrong (fewer than 5 sharing delegates), the live file is kept. Nothing is committed.
 name: Deploy
 
 on:
@@ -17,6 +22,8 @@ on:
     branches: [ark-mainnet]
   pull_request:
   workflow_dispatch:
+  schedule:
+    - cron: "17 */12 * * *"
 
 permissions:
   contents: read
@@ -39,6 +46,18 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Reward-sharing data
+        timeout-minutes: 25
+        env:
+          FRESH: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+        run: |
+          live="https://$CUSTOM_DOMAIN/shares.json"
+          [ "$CUSTOM_DOMAIN" = "none" ] && live="https://$PAGES_PROJECT.pages.dev/shares.json"
+          reuse() { curl -sf --max-time 20 -o public/shares.json "$live" && echo "Reusing $live"; }
+          if [ "$FRESH" != "true" ] && reuse; then exit 0; fi
+          if python3 tools/ark-share/analyzer.py --page public/shares.json > /dev/null; then exit 0; fi
+          echo "::warning::Share crawl failed; keeping the live shares.json"
+          reuse || { rm -f public/shares.json; echo "::warning::No shares.json in this deploy"; }
       - run: npm run check
       - run: npm run build
       - uses: actions/upload-artifact@v4
