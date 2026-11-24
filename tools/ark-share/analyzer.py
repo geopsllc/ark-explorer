@@ -57,6 +57,11 @@ Method (per delegate)
    one payout so far, the accrual rate comes from share * vote weight instead. When a delay is
    found, the forging intervals are shifted by it and the delegate is analysed again.
 
+11. Votes during the window. Payouts were paid on the votes as they stood during the window, not
+   on today's. A voter who joined during or after the window counts only for the time they were
+   voting, and one who left counts for the time before they left (from the vote scan). Without
+   this, a 7k ARK switch from one 1M delegate to another moves both shares by ~0.7%.
+
 Two numbers come out:
 - share: what a voter actually receives as a % of their proportional cut of everything forged.
   This is the number a voter cares about.
@@ -368,6 +373,25 @@ def match_redirects(est, F, V, voters, paid, seen, n_runs, addr, skip):
     return found
 
 
+def window_votes(V, voters, votes, pk, t0, t1, left_balances):
+    """Time-averaged votes over the forging window (t0, t1] (method 11).
+    votes: {voter: (ts, [votes])} latest vote tx per wallet; left_balances: {voter: balance} of
+    wallets whose latest vote removed this delegate. -> (votes, [changes])"""
+    span = max(1, t1 - t0)
+    out, changes = V, []
+    for v, (ts, vs) in votes.items():
+        if ts <= t0:
+            continue
+        before = (min(ts, t1) - t0) / span           # share of the window before the vote tx
+        if "+" + pk in vs and v in voters:            # joined: not voting before ts
+            out -= voters[v] * before
+            changes.append({"voter": v, "joined": ts, "ark": voters[v] / SATOSHI})
+        elif "-" + pk in vs and v in left_balances:   # left: was voting until ts
+            out += left_balances[v] * before
+            changes.append({"voter": v, "left": ts, "ark": left_balances[v] / SATOSHI})
+    return int(out), changes
+
+
 def estimate_delay(samples, est, rate_per_s, V, voters):
     """samples: [(vote ts, voter, [(payout ts, amount)])] -> per-sample delay (method 10)."""
     out = []
@@ -392,12 +416,13 @@ def estimate_delay(samples, est, rate_per_s, V, voters):
 
 
 def analyze(delegate, voters, runs_window, boundary_run, forged, now, payer=None,
-            side=None, transfers_only=False):
+            side=None, transfers_only=False, v_window=None, joined=None):
     """side: {address: amount} single transfers sent during the window by a multipayment payer
     (operator income). transfers_only: the payer pays everyone with single transfers."""
     side = side or {}
+    joined = joined or set()          # voters who joined during/after the window: not owed for all of it
     addr = delegate["address"]
-    V = int(delegate["votes"])
+    V = v_window or int(delegate["votes"])      # votes during the window (method 11)
     F = forged["forged"]
     n_runs = len(runs_window)
     times = [boundary_run["ts"]] + [r["ts"] for r in runs_window]
@@ -444,7 +469,7 @@ def analyze(delegate, voters, runs_window, boundary_run, forged, now, payer=None
         est = sum(r * due for r, due in band) / sum(due for _, due in band)
     hi = est * 1.5 + 0.05 if est is not None else None
 
-    redirects = match_redirects(est, F, V, voters, paid, seen, n_runs, addr, capped) \
+    redirects = match_redirects(est, F, V, voters, paid, seen, n_runs, addr, capped | joined) \
         if est is not None and not transfers_only else []
     redirected_to = defaultdict(int)          # recipient -> amount credited to voters
     redirect_voters = {}
@@ -521,7 +546,9 @@ def analyze(delegate, voters, runs_window, boundary_run, forged, now, payer=None
         if len(below) >= 0.9 * len(unpaid) and lo >= 2 * SATOSHI:
             minimum = {"between_ark": [round(max(below) / SATOSHI, 1), round(lo / SATOSHI, 1)],
                        "voters": len(below), "pct_votes": round(100 * sum(below) / V, 1)}
-    excluded = {a: b for a, b in unpaid.items() if minimum is None or b >= min(paid_bal)}
+    new_unpaid = {a: b for a, b in unpaid.items() if a in joined}
+    excluded = {a: b for a, b in unpaid.items()
+                if a not in joined and (minimum is None or b >= min(paid_bal))}
 
     # confidence, from the large sample: share of voters + share of vote weight that sit on the
     # share or are explained (capped, fixed, redirected)
@@ -565,6 +592,7 @@ def analyze(delegate, voters, runs_window, boundary_run, forged, now, payer=None
                        "fixed_ark_per_run": per_run_amounts[a][0] / SATOSHI if a in fixed else None}
                       for a in sorted(over, key=lambda a: -voters[a]) if voters[a] >= 0.01 * V],
         "excluded": {"count": len(excluded), "pct_votes": round(100 * sum(excluded.values()) / V, 1)},
+        "new_voters": {"count": len(new_unpaid), "ark": round(sum(new_unpaid.values()) / SATOSHI)},
         "unpaid": {"count": len(unpaid), "weight_pct": round(100 * sum(unpaid.values()) / V, 1),
                    "self_vote_pct": round(100 * voters.get(addr, 0) / V, 1),
                    "largest": [{"address": a, "pct": round(100 * b / V, 1)}
@@ -661,7 +689,7 @@ def split_payouts(txs, voters):
     return txs, [], True
 
 
-def evaluate_payer(c, delegate, voters, payer, txs, now, reward, shift=0):
+def evaluate_payer(c, delegate, voters, payer, txs, now, reward, shift=0, votes=None):
     run_txs, singles, transfers_only = split_payouts(txs, voters)
     picked = pick_window(group_runs(run_txs), now)
     if not picked:
@@ -675,8 +703,23 @@ def evaluate_payer(c, delegate, voters, payer, txs, now, reward, shift=0):
                     side[a] += amt
     forged = fetch_forged(c, delegate["publicKey"], reward,
                           [brun["ts"] - shift] + [r["ts"] - shift for r in win])
-    return analyze(delegate, voters, win, brun, forged, now, payer=payer, side=dict(side),
-                   transfers_only=transfers_only)
+    pk, t0, t1 = delegate["publicKey"], brun["ts"] - shift, win[-1]["ts"] - shift
+    votes = votes or {}
+    left = [v for v, (ts, vs) in votes.items() if ts > t0 and "-" + pk in vs and "+" + pk not in vs]
+    left_bal = {}
+    for i in range(0, len(left), 50):
+        try:
+            d = c.get(f"/wallets?address={','.join(left[i:i + 50])}&limit=50")
+            left_bal.update({w["address"]: int(w["balance"]) for w in d["data"]})
+        except ApiError:
+            pass
+    v_win, changes = window_votes(int(delegate["votes"]), voters, votes, pk, t0, t1, left_bal)
+    res = analyze(delegate, voters, win, brun, forged, now, payer=payer, side=dict(side),
+                  transfers_only=transfers_only, v_window=v_win,
+                  joined={ch["voter"] for ch in changes if "joined" in ch})
+    res["vote_changes"] = changes
+    res["votes_window"] = v_win / SATOSHI
+    return res
 
 
 def payout_wallet_candidates(c, delegate, voters, own_txs, now):
@@ -726,7 +769,7 @@ def with_delay(c, delegate, voters, payer, txs, now, reward, res, votes):
              "first_payout_h": round(statistics.median(f["first_payout_h"] for f in paid), 1) if paid else None}
     if delay["delay_h"] and delay["delay_h"] >= 1:
         again = evaluate_payer(c, delegate, voters, payer, txs, now, reward,
-                               shift=int(delay["delay_h"] * 3600))
+                               shift=int(delay["delay_h"] * 3600), votes=votes)
         if again and again["status"] in SHARING:
             again["flags"] += [f for f in res["flags"] if f.startswith("pays from a separate wallet")]
             res = again
@@ -743,12 +786,13 @@ def analyze_delegate(c, delegate, now, reward, votes=None):
     addr = delegate["address"]
     voters = fetch_voters(c, addr)
     txs, newest = fetch_sent(c, addr, now)
-    res = evaluate_payer(c, delegate, voters, addr, txs, now, reward)
+    votes = votes or {}
+    res = evaluate_payer(c, delegate, voters, addr, txs, now, reward, votes=votes)
     if res and res["status"] in SHARING:
         return with_delay(c, delegate, voters, addr, txs, now, reward, res, votes or {})
     for how, cand in payout_wallet_candidates(c, delegate, voters, txs, now):
         ctxs, _ = fetch_sent(c, cand, now)
-        alt = evaluate_payer(c, delegate, voters, cand, ctxs, now, reward)
+        alt = evaluate_payer(c, delegate, voters, cand, ctxs, now, reward, votes=votes)
         if alt and alt["status"] in SHARING:
             alt["flags"].append(f"pays from a separate wallet {cand} ({how})")
             return with_delay(c, delegate, voters, cand, ctxs, now, reward, alt, votes or {})
