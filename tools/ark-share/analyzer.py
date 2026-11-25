@@ -225,6 +225,13 @@ def group_runs(txs):
         gaps = [b["ts"] - a["ts"] for a, b in zip(runs, runs[1:])]
         if statistics.median(gaps) >= MERGE_IF:
             runs = _group(txs, MERGE_GAP)
+            # Batches of one payout can be hours apart (hash: 2-4 h on some days). Merge pieces
+            # within a quarter of the pool's own interval: ~6 h for daily pools, 2 h at 6-hourly.
+            if len(runs) >= 3:
+                gaps = [b["ts"] - a["ts"] for a, b in zip(runs, runs[1:])]
+                wide = statistics.median(gaps) / 4
+                if wide > MERGE_GAP:
+                    runs = _group(txs, wide)
     for r in runs:
         pays = defaultdict(int)
         for t in r["txs"]:
