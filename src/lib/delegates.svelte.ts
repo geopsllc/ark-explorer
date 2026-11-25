@@ -110,8 +110,15 @@ export function startDirectory() {
     index();
   }
   const stale = !cached || Date.now() - cached.at > DIRECTORY_TTL || !cached.complete;
+  // cached voter counts show at once, even expired ones; expired ones are refetched in the background
   const v = load<{ at: number; counts: Record<string, number> }>(votersKey());
-  if (v && Date.now() - v.at < VOTERS_TTL) dir.voters = v.counts;
+  if (v?.counts) {
+    dir.voters = v.counts;
+    if (Date.now() - v.at < VOTERS_TTL) {
+      votersAt = v.at;
+      fetched = new Set(Object.keys(v.counts));
+    }
+  }
 
   const refreshTop = () => loadPage(1, cached ? "background" : "interactive").then(() => persist()).catch(() => {});
   if (stale) fullLoad = loadAll().catch(() => {});
@@ -141,43 +148,50 @@ export function startDirectory() {
 let votersQueue: string[] = [];
 let votersRunning = false;
 let votersAt = 0;
+/** counts fetched in the current TTL period; the others on screen are older and get refetched */
+let fetched = new Set<string>();
 /** Fetch voter counts for these delegates in the background (only ones not cached). */
 const VOTER_WORKERS = 6;
-let saveTimer: ReturnType<typeof setTimeout> | null = null;
-/** Persist the counts at most every 500 ms while they stream in. */
-function saveVoters() {
-  if (saveTimer) return;
-  saveTimer = setTimeout(() => {
-    saveTimer = null;
-    save(votersKey(), { at: votersAt, counts: $state.snapshot(dir.voters) });
-  }, 500);
-}
+const VOTER_TRIES = 3;
 
+/**
+ * Counts are collected off screen and shown together when the batch is done, so the column fills
+ * (or refreshes) in one go instead of row by row. Old counts stay on screen until then.
+ */
 export function wantVoters(pks: string[]) {
-  if (Date.now() - votersAt > VOTERS_TTL && votersAt) {
-    dir.voters = {};
+  if (votersAt && Date.now() - votersAt > VOTERS_TTL) {
+    fetched = new Set();
     votersAt = 0;
   }
-  votersQueue = pks.filter((pk) => dir.voters[pk] === undefined);
-  if (votersRunning) return;
+  votersQueue = pks.filter((pk) => !fetched.has(pk));
+  if (votersRunning || !votersQueue.length) return;
   votersRunning = true;
+  const batch: Record<string, number> = {};
+  const tries: Record<string, number> = {};
   const worker = async () => {
     while (votersQueue.length) {
       const pk = votersQueue.shift()!;
-      if (dir.voters[pk] !== undefined) continue;
+      if (fetched.has(pk)) continue;
       try {
         // like ArkScan: only voters holding at least 1 ARK (dust wallets would more than double the count)
         const body = await get(`/delegates/${pk}/voters?limit=1&balance.from=100000000`, "background");
-        dir.voters[pk] = body.meta?.totalCount ?? 0;
-        if (!votersAt) votersAt = Date.now();
-        saveVoters();
+        batch[pk] = body.meta?.totalCount ?? 0;
+        fetched.add(pk);
       } catch {
+        // retry a few times so one failed request doesn't leave a gap in the column
+        if ((tries[pk] = (tries[pk] ?? 0) + 1) < VOTER_TRIES) votersQueue.push(pk);
         await new Promise((r) => setTimeout(r, 2000));
       }
     }
   };
   // a few at a time: 51 counts in a few seconds instead of ~20 s one by one
-  Promise.all(Array.from({ length: VOTER_WORKERS }, worker)).finally(() => (votersRunning = false));
+  Promise.all(Array.from({ length: VOTER_WORKERS }, worker)).finally(() => {
+    votersRunning = false;
+    if (!Object.keys(batch).length) return;
+    if (!votersAt) votersAt = Date.now();
+    dir.voters = { ...dir.voters, ...batch };
+    save(votersKey(), { at: votersAt, counts: $state.snapshot(dir.voters) });
+  });
 }
 
 // ---------- missed blocks ----------
@@ -413,8 +427,13 @@ export function missedSinceLastBlock(d: Delegate): number {
 
 /** Forging health; the rule (and why) is in roundview.ts. */
 export type Health = "forging" | "missed" | "not-forging" | "unknown";
+/** Last health worked out while the scan was current, shown while it catches up (tab back in view). */
+const lastHealth = new Map<string, Health>();
 export function forgingHealth(d: Delegate): Health {
-  // until the scan covers the latest blocks, "no misses seen" would just mean "not looked yet"
-  if (!missed.current) return "unknown";
-  return healthFromStreak(missStreak(d), chain.activeDelegates);
+  // until the scan covers the latest blocks, "no misses seen" would just mean "not looked yet":
+  // show the last known status meanwhile, and "unknown" only if there is none
+  if (!missed.current) return lastHealth.get(d.publicKey) ?? "unknown";
+  const h = healthFromStreak(missStreak(d), chain.activeDelegates);
+  lastHealth.set(d.publicKey, h);
+  return h;
 }

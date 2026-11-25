@@ -42,16 +42,17 @@
 
   // ----- forging health (from missed-slot history) -----
   const health = (d: Delegate) => forgingHealth(d);
-  /** null until the missed-slot scan reaches the latest block */
+  /** null until a status is known (the last known one is kept while the scan catches up) */
   const healthCounts = $derived.by(() => {
     void missed.lastMissed;
-    if (!missed.current) return null;
+    void missed.current;
     const c = { forging: 0, missed: 0, "not-forging": 0 };
+    let known = 0;
     for (const d of active) {
       const h = health(d);
-      if (h !== "unknown") c[h]++;
+      if (h !== "unknown") (c[h]++, known++);
     }
-    return c;
+    return known ? c : null;
   });
 
   const totalActiveVotes = $derived(active.reduce((s, d) => s + BigInt(d.votes), 0n));
