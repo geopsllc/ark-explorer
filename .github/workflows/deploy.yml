@@ -11,7 +11,8 @@
 #
 # Without the secrets (e.g. in a fork) the build still runs and the deploy steps are skipped.
 #
-# Reward-sharing data (hidden #/shares page): every hour the schedule crawls api.ark.io with
+# Reward-sharing data (hidden #/shares page): every 6 hours a Cloudflare Worker cron
+# (tools/dispatch-worker) starts this workflow by workflow_dispatch, which crawls api.ark.io with
 # tools/ark-share/analyzer.py (~760 requests, ~5 min) and deploys the result as /shares.json.
 # Pushes and pull requests reuse the live /shares.json instead of crawling, unless a push
 # changes tools/ark-share or this workflow. If a crawl fails or looks wrong (fewer than 5 sharing delegates),
@@ -22,9 +23,7 @@ on:
   push:
     branches: [ark-mainnet]
   pull_request:
-  workflow_dispatch:
-  schedule:
-    - cron: "41 * * * *"
+  workflow_dispatch:   # every 6 hours from tools/dispatch-worker; GitHub's schedule rarely fired
 
 permissions:
   contents: read
