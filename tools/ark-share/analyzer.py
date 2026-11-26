@@ -58,9 +58,36 @@ Method (per delegate)
    found, the forging intervals are shifted by it and the delegate is analysed again.
 
 11. Votes during the window. Payouts were paid on the votes as they stood during the window, not
-   on today's. A voter who joined during or after the window counts only for the time they were
-   voting, and one who left counts for the time before they left (from the vote scan). Without
-   this, a 7k ARK switch from one 1M delegate to another moves both shares by ~0.7%.
+   on today's. Pools pay by true block weight: each block pays b / (votes at that block), and a
+   voter is paid only for the blocks forged while it was voting (cams paid a 411k voter who joined
+   a third into a day a third of that day). So every interval (shifted by the payout delay) is
+   measured against the block-weighted average of 1 / votes over it, rebuilt from the vote scan. Without this, a 7k ARK switch
+   from one 1M delegate to another moves both shares by ~0.7%, and a 411k joiner moves cams by 3%.
+
+12. Operator-owned votes. When a recipient's amount is a voter's whole cut plus the operator cut
+   (the combined case in 7), that voter is the operator's own wallet: its payout goes to the
+   operator with the operator's income. Pools leave those votes out of the voters' split, so every
+   other voter gets share / (1 - own votes). Other pools count those votes in the split and send
+   their cut to the operator (brohan, goose); the amounts fit both readings, so the share is
+   measured again without those votes and that reading is kept only when it lands on a multiple
+   of 5% and the first one clearly doesn't (geops: 52.3% with them, 49.7% without; the real
+   share is 50%). Their payout then counts as operator, and what the own wallets still get at
+   their own address is added back to the share: it comes out of the voters' pool (geops 49.7 + 0.36).
+
+13. Fixed periods. Some pools pay a fixed period per payout (24 h of rewards) at times that drift
+   (hash: 08:56, 08:38, 07:40 ... 02:56). Measured between payout times, such a pool reads too
+   high or too low by the drift (hash: 7 days paid in 164 h read 76% instead of 75%). A period is
+   the delegate's own blocks, not hours: "daily" is 211 blocks (one per 51-slot round of 8 s, 23.9 h).
+   The own-block count of every interval tells the cycles apart: a block-count pool (kaos) has the
+   same count between payouts (211); a timer pool varies (208-214) with an even ARK per hour; a
+   fixed-period pool varies more (hash: 191-209, it pays 211-block chunks from a backlog) with an
+   even ARK per payout. Both readings are tried on the ordinary payouts and the one that makes them
+   most even is used; when the gaps vary by less than 1.5 h they can't be told apart and the time
+   since the last payout is used.
+
+14. Fees. Some scripts share rewards + fees, others keep the fees and share block rewards only.
+   Fees are ~0.04% of forged on mainnet today, too little to matter; once they reach 0.25%, the
+   share is also measured on rewards only and that reading is kept when it is clearly rounder.
 
 Two numbers come out:
 - share: what a voter actually receives as a % of their proportional cut of everything forged.
@@ -290,12 +317,91 @@ def ratio_mode(pairs, half=0.0075):
 
 def round_share(pct):
     """Whole percent, rounded down, allowing for SHARE_TOLERANCE of measurement noise
-    (84.86 -> 85, 75.33 -> 75, 98.54 -> 98)."""
-    return int(math.floor(pct + SHARE_TOLERANCE))
+    (84.86 -> 85, 75.33 -> 75, 98.54 -> 98, 49.70 -> 50)."""
+    return int(math.floor(round(pct + SHARE_TOLERANCE, 6)))
 
 
-def voter_ratios(voters, V, addr, boundary_run, runs_window, per_run):
-    """-> {address: (ratio, due at 100%)} measured between each voter's own payouts (method 4)."""
+def off_round(est):
+    """Distance in % from the nearest multiple of 5% (share settings almost always are one)."""
+    p = 100 * est
+    return abs(p - 5 * round(p / 5))
+
+
+def _nice(levels):
+    """round numbers, roundest first within each power of ten: 10, 50, 20, 25, then 1-9 x 10^k"""
+    for m in levels:
+        for k in range(-1, 8):
+            yield m * 10 ** k
+
+
+def roundest_between(lo, hi):
+    """The roundest number in (lo, hi]: operators set minimums at round numbers (geops: 10 ARK,
+    seen as 'unpaid below 8.2, paid from 18.3'). None if there is none."""
+    for levels in ((1,), (5,), (2, 2.5), (3, 4, 6, 7, 8, 9), (1.5,)):
+        found = [x for x in _nice(levels) if lo < x <= hi]
+        if found:
+            return max(found) if levels == (1,) else min(found)
+    return None
+
+
+def round_cap(x):
+    """A measured cap snapped to the nearest round number within 10% (caps are set as 60k, 100k ...)."""
+    if not x:
+        return x
+    best = min(_nice((1, 1.5, 2, 2.5, 3, 4, 5, 6, 7, 8, 9)), key=lambda n: abs(n - x))
+    return best if abs(best - x) <= 0.1 * x else x
+
+
+def nominal_interval(h):
+    for n in (24, 12, 8, 6):
+        if abs(h - n) <= n * 0.17:
+            return n
+    return None
+
+
+def period_model(addr, boundary_run, runs_window, per_run):
+    """Forged per payout if the pool pays a whole number of nominal periods per payout at
+    drifting times (method 13). -> (per-run forged, period h), or None when the time since the
+    last payout fits the pool's payouts better."""
+    ts = [boundary_run["ts"]] + [r["ts"] for r in runs_window]
+    nom = nominal_interval(statistics.median((b - a) / 3600 for a, b in zip(ts, ts[1:])))
+    if not nom:
+        return None
+    k = [round((t - ts[0]) / (nom * 3600)) for t in ts]
+    if k[-1] < MIN_RUNS or any(b < a for a, b in zip(k, k[1:])):
+        return None
+    # a period is a whole number of the delegate's own blocks: 211 for "daily" (one block per
+    # 51-slot round of 8 s is 211.8 a day; pools pay 211, 23.9 h, not 24 h)
+    blocks = sum(p.get("blocks", 0) for p in per_run)
+    if not blocks:
+        return None
+    per_period = sum(p["forged"] for p in per_run) / blocks * int(nom * 3600 / (8 * 51))
+    alt = [per_period * (b - a) for a, b in zip(k, k[1:])]
+    # ordinary payouts only (one period after the previous one): if the pool pays the time since
+    # the last payout, payout / hours is even; if it pays a fixed period, the payout itself is
+    out, hrs = [], []
+    for j, r in enumerate(runs_window):
+        h = (ts[j + 1] - ts[j]) / 3600
+        if k[j + 1] - k[j] == 1 and 0.75 * nom <= h <= 1.25 * nom:
+            out.append(sum(amt for x, amt in r["pays"].items() if x != addr))
+            hrs.append(h)
+    if len(out) < 4 or max(hrs) - min(hrs) < 1.5:     # too even to tell the two apart
+        return None
+
+    def cv(xs):
+        m = statistics.mean(xs)
+        return statistics.pstdev(xs) / m if m else None
+
+    a, b = cv([o / h for o, h in zip(out, hrs)]), cv(out)
+    if a is None or b is None or b >= 0.5 * a:
+        return None
+    return alt, nom
+
+
+def voter_ratios(voters, V, addr, boundary_run, runs_window, per_run, v_runs=None, minus=0):
+    """-> {address: (ratio, due at 100%)} measured between each voter's own payouts (method 4).
+    v_runs: votes at each payout ([boundary] + window), so interval j is owed on v_runs[j + 1]
+    (method 11). minus: operator-owned votes left out of the split (method 12)."""
     cum = [0]
     for p in per_run:
         cum.append(cum[-1] + p["forged"])
@@ -309,7 +415,11 @@ def voter_ratios(voters, V, addr, boundary_run, runs_window, per_run):
         first, last = h[0][0], h[-1][0]
         if last > first and voters[a] > 0:
             got = sum(amt for i, amt in h if i > first)
-            due = (cum[last] - cum[first]) * voters[a] / V
+            if v_runs:
+                due = voters[a] * sum(per_run[j]["forged"] / (v_runs[j + 1] - minus)
+                                      for j in range(first, last))
+            else:
+                due = (cum[last] - cum[first]) * voters[a] / (V - minus)
             out[a] = (got / due, due)
     return out
 
@@ -423,13 +533,18 @@ def estimate_delay(samples, est, rate_per_s, V, voters):
 
 
 def analyze(delegate, voters, runs_window, boundary_run, forged, now, payer=None,
-            side=None, transfers_only=False, v_window=None, joined=None):
+            side=None, transfers_only=False, v_window=None, joined=None, v_runs=None):
     """side: {address: amount} single transfers sent during the window by a multipayment payer
     (operator income). transfers_only: the payer pays everyone with single transfers."""
     side = side or {}
     joined = joined or set()          # voters who joined during/after the window: not owed for all of it
     addr = delegate["address"]
     V = v_window or int(delegate["votes"])      # votes during the window (method 11)
+    F_actual = forged["forged"]
+    fixed_period = period_model(addr, boundary_run, runs_window, forged["per_run"])
+    if fixed_period:      # method 13: measure against whole periods, not the drifting payout times
+        forged = dict(forged, forged=sum(fixed_period[0]),
+                      per_run=[dict(p, forged=f) for p, f in zip(forged["per_run"], fixed_period[0])])
     F = forged["forged"]
     n_runs = len(runs_window)
     times = [boundary_run["ts"]] + [r["ts"] for r in runs_window]
@@ -448,8 +563,9 @@ def analyze(delegate, voters, runs_window, boundary_run, forged, now, payer=None
             "txs_per_run": round(sum(len(r["txs"]) for r in runs_window) / n_runs, 1),
             "last_payout_h_ago": round((now - runs_window[-1]["last"]) / 3600, 1),
         },
-        "forged": {"blocks": forged["blocks"], "ark": F / SATOSHI,
-                   "fees_pct": round(100 * forged["fees"] / F, 2) if F else 0},
+        "forged": {"blocks": forged["blocks"], "ark": F_actual / SATOSHI,
+                   "fees_pct": round(100 * forged["fees"] / F_actual, 2) if F_actual else 0},
+        "fixed_period_h": fixed_period[1] if fixed_period else None,
         "flags": [],
     }
     if F <= 0:
@@ -464,21 +580,53 @@ def analyze(delegate, voters, runs_window, boundary_run, forged, now, payer=None
     total_out = sum(p for a, p in paid.items() if a != addr)
     due100 = {a: F * b / V for a, b in voters.items()}      # a voter's cut at 100%
 
-    ratios = voter_ratios(voters, V, addr, boundary_run, runs_window, forged["per_run"])
-    cap = detect_cap(paid, voters, addr)
-    capped = set(cap[1]) if cap else set()
-    pool = [(r, voters[a], due) for a, (r, due) in ratios.items() if a not in capped]
-    est = None
-    if pool:
-        mode = ratio_mode([(r, w) for r, w, _ in pool])
-        band = [(r, due) for r, _, due in pool if abs(r - mode) <= BAND]
-        # aggregate over the band: total paid / total due. Voters' deposits and withdrawals during
-        # the window push single ratios up or down; the aggregate averages that out.
-        est = sum(r * due for r, due in band) / sum(due for _, due in band)
-    hi = est * 1.5 + 0.05 if est is not None else None
+    basis = forged["per_run"]
 
+    def measure(minus=0):
+        ratios = voter_ratios(voters, V, addr, boundary_run, runs_window, basis, v_runs, minus)
+        cap = detect_cap(paid, voters, addr)
+        capped = set(cap[1]) if cap else set()
+        pool = [(r, voters[a], due) for a, (r, due) in ratios.items() if a not in capped]
+        est = None
+        if pool:
+            mode = ratio_mode([(r, w) for r, w, _ in pool])
+            band = [(r, due) for r, _, due in pool if abs(r - mode) <= BAND]
+            # aggregate over the band: total paid / total due. Voters' deposits and withdrawals
+            # during the window push single ratios up or down; the aggregate averages that out.
+            est = sum(r * due for r, due in band) / sum(due for _, due in band)
+        return ratios, cap, capped, est
+
+    ratios, cap, capped, est = measure()
+    # some scripts share rewards + fees, others keep the fees: with fees a real part of forged
+    # (>= 0.25%), measure on rewards only too and keep it if it is clearly rounder (method 14)
+    fee_basis = False
+    if est is not None and forged.get("fees", 0) >= 0.0025 * F:
+        keep = forged["rewards"] / (forged["rewards"] + forged["fees"])
+        basis = [dict(p, forged=p["forged"] * keep) for p in forged["per_run"]]
+        again = measure()
+        if again[3] is not None and off_round(again[3]) + 0.2 < off_round(est):
+            ratios, cap, capped, est = again
+            fee_basis = True
+        else:
+            basis = forged["per_run"]
     redirects = match_redirects(est, F, V, voters, paid, seen, n_runs, addr, capped | joined) \
         if est is not None and not transfers_only else []
+    # a voter's whole cut arriving with the operator cut: the operator's own votes, left out of
+    # the voters' split (method 12). Measure the share again without them.
+    own = [rd for rd in redirects if rd["operator_part"] > 0]
+    own_voters = [v for rd in own for v in rd["voters"]]
+    own_votes = sum(voters[v] for v in own_voters)
+    if own_votes:
+        again = measure(own_votes)
+        if again[3] is not None:
+            # whatever the own wallets still get at their own address comes out of the same pool
+            again = again[:3] + (again[3] + sum(paid.get(v, 0) for v in own_voters) / F,)
+        if again[3] is not None and off_round(again[3]) <= 0.5 and off_round(est) >= 1.0:
+            ratios, cap, capped, est = again
+            redirects = [rd for rd in redirects if rd["operator_part"] <= 0]
+        else:                        # the pool counts those votes: a redirect + operator cut
+            own, own_voters, own_votes = [], [], 0
+    hi = est * 1.5 + 0.05 if est is not None else None
     redirected_to = defaultdict(int)          # recipient -> amount credited to voters
     redirect_voters = {}
     for rd in redirects:
@@ -553,6 +701,7 @@ def analyze(delegate, voters, runs_window, boundary_run, forged, now, payer=None
         below = [b for b in unpaid.values() if b < lo]
         if len(below) >= 0.9 * len(unpaid) and lo >= 2 * SATOSHI:
             minimum = {"between_ark": [round(max(below) / SATOSHI, 1), round(lo / SATOSHI, 1)],
+                       "ark": roundest_between(max(below) / SATOSHI, lo / SATOSHI),
                        "voters": len(below), "pct_votes": round(100 * sum(below) / V, 1)}
     new_unpaid = {a: b for a, b in unpaid.items() if a in joined}
     excluded = {a: b for a, b in unpaid.items()
@@ -572,6 +721,7 @@ def analyze(delegate, voters, runs_window, boundary_run, forged, now, payer=None
     conf = (c_in / c_all + w_in / w_all) / 2 if c_all and w_all else None
 
     res.update({
+        "fees_kept": fee_basis,
         "share_pct": round_share(100 * est) if est is not None else None,
         "share_raw_pct": round(100 * est, 2) if est is not None else None,
         "confidence": round(conf, 2) if conf is not None else None,
@@ -582,6 +732,8 @@ def analyze(delegate, voters, runs_window, boundary_run, forged, now, payer=None
         "separate_transfers_pct": round(100 * sum(side.values()) / F, 1),
         "operators": [{"address": a, "pct": round(100 * p / F, 2), "voter": a in voters}
                       for a, p in sorted(operators.items(), key=lambda kv: -kv[1])],
+        "own_votes": {"voters": own_voters, "to": [rd["to"] for rd in own],
+                      "pct_votes": round(100 * own_votes / V, 1)} if own_votes else None,
         "redirects": [{"to": rd["to"], "voters": rd["voters"],
                        "pct_votes": round(100 * sum(voters[v] for v in rd["voters"]) / V, 1),
                        "pct_forged": round(100 * rd["amount"] / F, 2),
@@ -589,7 +741,7 @@ def analyze(delegate, voters, runs_window, boundary_run, forged, now, payer=None
                        "partial": len(rd["partial"])}
                       for rd in redirects],
         "cap": {"ark_per_run": round(cap[0] / n_runs / SATOSHI, 2), "voters": len(cap[1]), "single": single_cap,
-                "votes_ark": round(cap[0] / (est * F / V) / SATOSHI) if est else None}
+                "votes_ark": round_cap(round(cap[0] / (est * F / V) / SATOSHI)) if est else None}
                if cap else None,
         "voters_paid": len(paid_voters),
         "voters_measured": len(ratios),
@@ -636,12 +788,19 @@ def classify(res, med_gap):
                      + (" (or a lower rate for that voter)" if res["cap"]["single"] else ""))
     if res["minimum"]:
         m = res["minimum"]
-        flags.append(f"minimum weight: {m['voters']} voters below {m['between_ark'][0]:g}-"
+        at = f"~{m['ark']:g} ARK minimum: " if m.get("ark") else ""
+        flags.append(f"minimum weight: {at}{m['voters']} voters below {m['between_ark'][0]:g}-"
                      f"{m['between_ark'][1]:g} ARK not paid ({m['pct_votes']}% of votes)")
     for o in res["over_rate"]:
         fx = f", fixed {o['fixed_ark_per_run']:g} ARK/run" if o["fixed_ark_per_run"] else ""
         flags.append(f"voter {o['address'][:8]}.. ({o['pct_votes']}% of votes) paid {o['rate']}%{fx}: "
                      f"the part above the share counts as operator")
+    if res.get("fees_kept"):
+        flags.append("shares block rewards only (keeps the fees)")
+    if res.get("own_votes"):
+        ov = res["own_votes"]
+        flags.append(f"operator's own votes: {len(ov['voters'])} voter(s) with {ov['pct_votes']}% of votes, "
+                     f"paid to {ov['to'][0][:8]}.. with the operator cut and left out of the voters' split")
     for rd in res["redirects"]:
         extra = f" + {rd['with_operator_cut_pct']}% operator cut" if rd["with_operator_cut_pct"] else ""
         part = (f" ({rd['partial']} also get a token amount at their own address: redirect or "
@@ -722,9 +881,32 @@ def evaluate_payer(c, delegate, voters, payer, txs, now, reward, shift=0, votes=
         except ApiError:
             pass
     v_win, changes = window_votes(int(delegate["votes"]), voters, votes, pk, t0, t1, left_bal)
+    # votes while each interval was forged (shifted by the payout delay). Pools pay by true block
+    # weight: each block pays b / (votes at that block), so an interval in which the votes changed
+    # is owed on the block-weighted average of 1 / votes, not 1 / the average of votes (cams: a 411k
+    # joiner a third into a day read that day at 100.9% instead of 98.5%). v_runs[j + 1] is owed
+    # for interval j.
+    events = []                                      # (ts, change in votes from then on)
+    for w, (ts, vs) in votes.items():
+        if "+" + pk in vs and w in voters:
+            events.append((ts, voters[w]))           # joined at ts
+        elif "-" + pk in vs and w in left_bal:
+            events.append((ts, -left_bal[w]))        # left at ts
+    events.sort()
+
+    def votes_at(t):
+        return int(delegate["votes"]) - sum(d for ts, d in events if ts > t)
+
+    run_ts = [brun["ts"]] + [r["ts"] for r in win]
+    v_runs = [int(delegate["votes"])]
+    for a, b in zip(run_ts, run_ts[1:]):
+        a, b = a - shift, b - shift
+        cuts = [a] + [ts for ts, _ in events if a < ts < b] + [b]
+        inv = sum((t1 - t0) / max(votes_at(t0), 1) for t0, t1 in zip(cuts, cuts[1:])) / max(1, b - a)
+        v_runs.append(max(int(1 / inv), 1) if inv > 0 else int(delegate["votes"]))
     res = analyze(delegate, voters, win, brun, forged, now, payer=payer, side=dict(side),
                   transfers_only=transfers_only, v_window=v_win,
-                  joined={ch["voter"] for ch in changes if "joined" in ch})
+                  joined={ch["voter"] for ch in changes if "joined" in ch}, v_runs=v_runs)
     res["vote_changes"] = changes
     res["votes_window"] = v_win / SATOSHI
     return res
@@ -896,7 +1078,7 @@ def page_json(results, now, reward):
             "lastPayout": now - int(s["last_payout_h_ago"] * 3600),
             "delayH": delay.get("delay_h"), "firstPayoutH": delay.get("first_payout_h"),
             "capArk": r["cap"]["votes_ark"] if r.get("cap") else None,
-            "minArk": r["minimum"]["between_ark"][1] if r.get("minimum") else None,
+            "minArk": (r["minimum"].get("ark") or r["minimum"]["between_ark"][1]) if r.get("minimum") else None,
             "perRun": r.get("per_run_effective_pct", []),
             "window": {"from": w["from"], "to": w["to"], "runs": w["runs"]},
             "operators": r.get("operators", [])[:3],

@@ -13,13 +13,17 @@ The full method is described in the `analyzer.py` docstring. In short:
 
 | Step | What it does | Edge cases it handles |
 |---|---|---|
-| Payout runs | Groups multipayments sent close together. If payouts are ≥ 6 h apart, pieces up to 2 h apart are merged | Pools that batch 64-recipient multipayments over ~1 h (hash) |
+| Payout runs | Groups multipayments sent close together. If payouts are ≥ 6 h apart, pieces up to a quarter of the pool's interval apart are merged (~6 h for daily pools) | Pools that batch 64-recipient multipayments hours apart (hash) |
 | Multipayments first | Public pools pay voters with multipayments. Single transfers count as operator income | A wallet that pays voters with single transfers only is **private** (arkpool, quarkpool) |
 | Forged | Block count per payout interval (`meta.totalCount`) × reward, plus fees of fee-carrying blocks | Missed blocks; fees (~0.1%) |
 | Per-voter ratio | paid ÷ (forged × voter weight ÷ total votes), measured between the voter's own payouts | Pools that pay a voter only once a minimum payout is reached |
+| Votes over time | Pools pay by true block weight, so each interval uses the block-weighted average of 1 ÷ votes over the time it was forged (shifted by the payout delay), rebuilt from vote transactions | Voters joining or leaving mid-window (a 411k joiner at cams, a 7k move from hash to goose) |
+| Cycle | Own blocks between payouts tell a block-count pool (same count each time, kaos 211) from a timer pool (208–214) and a fixed-period pool (hash: pays 211-block chunks from a backlog at drifting times). Fixed-period pools are measured per 211 blocks, not per gap between payouts | hash read 76% instead of 75% |
+| Own votes | A voter whose whole cut goes to the operator with the operator cut is the operator's own wallet. Measured again without those votes; kept only if that lands on a multiple of 5% and the first reading doesn't | geops leaves its own 5% out of the split (52.3% → 50%); brohan and goose count theirs |
 | Share | The densest ratio band, scored by share of voters + share of vote weight; the band's total paid ÷ total due | One whale on a special deal can't override 100 voters (samuray) |
 | Maximum weight | Top voters with equal payouts despite different balances | umbrella, dev51 (~100k ARK cap) |
-| Minimum weight | Every unpaid voter is smaller than every paid one | Reported as a minimum, not as unpaid voters |
+| Minimum weight | Every unpaid voter is smaller than every paid one; reported as the roundest number between them. Caps snap to a round number within 10% | geops: unpaid below 8.2, paid from 18.3 → 10 ARK minimum |
+| Fees | Shares are measured on rewards + fees; when fees reach 0.25% of forged, also on rewards only, kept if clearly rounder | Scripts that keep the fees (fees are ~0.04% of forged today) |
 | Redirects | A recipient whose amount matches a voter's shortfall (alone, or plus the operator cut) | Voters paid to another address (geops, brohan, goose) |
 | Operator | Large non-voters paid every run; the part of a voter's payout above the share | One or two operator addresses inside the multipayment (del, kaos) |
 | Payout wallet | Follows the main forwarding address, or a sender paying the top voters | Delegates paying from a separate wallet |
