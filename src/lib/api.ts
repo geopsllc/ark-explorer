@@ -1,13 +1,14 @@
 /**
- * Every API request goes through here. Timeouts, retries and pacing were tuned on api.ark.io
- * (ARK Core) and kept for the Mainsail API, which runs the same kind of public API behind the
- * same per-IP limit (x-ratelimit-limit: 200):
+ * Every API request goes through here. Timeouts, retries and pacing were first tuned on api.ark.io
+ * (ARK Core); the limits below were re-measured on the Mainsail testnet (November 2026):
  *
- * - Rate limit: 200 requests per 60 s window per IP. Browsers cannot read Retry-After /
- *   X-RateLimit-* (not in Access-Control-Expose-Headers), so we never want to hit it: requests
- *   are counted in a sliding 60 s window and each priority stops at its own share of
- *   REQUEST_BUDGET (170, leaving headroom for other tabs and apps on the same IP). After a 429
- *   the host is paused and probed every 10 s.
+ * - REST (testnet.mainsailhq.com/api): no limit is enforced. It sends x-ratelimit-limit: 200,
+ *   but the remaining count never goes down and 1,000+ requests a minute were all answered.
+ *   We still keep a budget (REQUEST_BUDGET, 600/min) so one browser stays polite.
+ * - JSON-RPC (/rpc/api): 150 requests per fixed 60 s window per IP, then 429 until the window
+ *   ends. Only the tip watcher uses it (~20-30 requests/min); its budget is RPC_BUDGET (120).
+ * - Requests are counted in a sliding 60 s window per host and each priority stops at its own
+ *   share of that host's budget. After a 429 the host is paused (REST: probed every 10 s).
  * - Block lists are always read by number range (/blocks?number.from=&number.to=): cheap and
  *   exact, also for the live poller.
  * - Deep newest-first pages are read oldest-first and reversed (see `pagedNewestFirst`).
@@ -15,12 +16,12 @@
  * Priorities:
  * - interactive (what the user is looking at): 10 s timeout, 500 retried after 0.3 s and 1 s,
  *   network errors after 0.5 s and 1.5 s, 4xx never.
- * - live (block poller): 3 s timeout, no retries: the next poll is at most a few seconds away.
+ * - live (block poller, tip watcher): 3 s timeout, no retries: the next poll is seconds away.
  * - background (directory): 8 s timeout, no retries; paused when the budget runs low.
- * - bulk (the 24 h missed-block scan, ~110 requests): like background but with a smaller share, so a
- *   first visit's scan cannot hold up the directory pages on screen.
+ * - bulk (the 24 h missed-turn scan): like background but with a smaller share, so a first
+ *   visit's scan cannot hold up the pages on screen.
  */
-import { PRIMARY_API, REQUEST_BUDGET } from "./site";
+import { PRIMARY_API, REQUEST_BUDGET, RPC_API, RPC_BUDGET } from "./site";
 
 export type Priority = "interactive" | "live" | "background" | "bulk";
 
@@ -49,70 +50,72 @@ const SHARE: Record<Priority, number> = { interactive: 1, live: 0.9, background:
 const MAX_SILENT_WAIT_MS = 3000;
 const WINDOW_MS = 60_000;
 const PROBE_MS = 10_000;
+/** After an RPC 429: its window is 60 s long and started at most 60 s ago. */
+const RPC_PAUSE_MS = 20_000;
 
-const started: number[] = []; // request start times inside the window
-let pausedUntil = 0; // after a 429: no requests before this (except the probe)
+/** One rate-limited host. */
+interface Bucket {
+  budget: number;
+  started: number[]; // request start times inside the window
+  pausedUntil: number; // after a 429: no requests before this (except the REST probe)
+}
+const rest: Bucket = { budget: REQUEST_BUDGET, started: [], pausedUntil: 0 };
+const rpcBucket: Bucket = { budget: RPC_BUDGET, started: [], pausedUntil: 0 };
 let probing = false;
 
-export const stats = { requests: 0, last429: 0 };
+export const stats = { requests: 0, rpcRequests: 0, last429: 0 };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-function prune(now: number) {
-  while (started.length && now - started[0] >= WINDOW_MS) started.shift();
+/** Milliseconds until `priority` may start a request on `b` (0 = now). */
+function budgetWait(b: Bucket, priority: Priority, now: number): number {
+  while (b.started.length && now - b.started[0] >= WINDOW_MS) b.started.shift();
+  if (now < b.pausedUntil) return b.pausedUntil - now;
+  const limit = Math.floor(b.budget * SHARE[priority]);
+  if (b.started.length < limit) return 0;
+  return b.started[b.started.length - limit] + WINDOW_MS - now + 5;
 }
 
-/** Milliseconds until `priority` may start a request (0 = now). */
-function budgetWait(priority: Priority, now: number): number {
-  prune(now);
-  if (now < pausedUntil) return pausedUntil - now;
-  const limit = Math.floor(REQUEST_BUDGET * SHARE[priority]);
-  if (started.length < limit) return 0;
-  return started[started.length - limit] + WINDOW_MS - now + 5;
-}
-
-async function acquire(priority: Priority) {
+async function acquire(b: Bucket, priority: Priority) {
   for (;;) {
-    const wait = budgetWait(priority, Date.now());
+    const wait = budgetWait(b, priority, Date.now());
     if (wait === 0) break;
     if (priority === "interactive" && wait > MAX_SILENT_WAIT_MS) throw new RateLimitError(wait / 1000);
     if (priority === "live" && wait > 1000) throw new RateLimitError(wait / 1000); // the poller retries on its own schedule
     await sleep(Math.min(wait, 1000));
   }
-  started.push(Date.now());
-  stats.requests++;
+  b.started.push(Date.now());
 }
 
-/** After a 429 nothing is sent until a cheap probe gets through (every 10 s). */
+/** After a REST 429 nothing is sent until a cheap probe gets through (every 10 s). */
 function startProbe() {
   if (probing) return;
   probing = true;
-  pausedUntil = Date.now() + PROBE_MS;
+  rest.pausedUntil = Date.now() + PROBE_MS;
   (async () => {
     for (;;) {
-      await sleep(Math.max(0, pausedUntil - Date.now()));
+      await sleep(Math.max(0, rest.pausedUntil - Date.now()));
       try {
         const res = await fetch(PRIMARY_API + "/blockchain", { cache: "no-store" });
         if (res.status !== 429) break;
       } catch {
         /* network trouble: keep probing */
       }
-      pausedUntil = Date.now() + PROBE_MS;
+      rest.pausedUntil = Date.now() + PROBE_MS;
     }
-    pausedUntil = 0;
+    rest.pausedUntil = 0;
     probing = false;
   })();
 }
 
-async function once(path: string, priority: Priority, signal?: AbortSignal): Promise<any> {
-  await acquire(priority);
+/** fetch with the priority's timeout, tied to the caller's abort signal */
+async function timedFetch(url: string, init: RequestInit, priority: Priority, signal?: AbortSignal): Promise<Response> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), TIMEOUT[priority]);
   const onAbort = () => ctrl.abort();
   signal?.addEventListener("abort", onAbort);
-  let res: Response;
   try {
-    res = await fetch(/^https?:/.test(path) ? path : PRIMARY_API + path, { signal: ctrl.signal, cache: "no-store" });
+    return await fetch(url, { ...init, signal: ctrl.signal, cache: "no-store" });
   } catch (e: any) {
     if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
     throw new ApiError(ctrl.signal.aborted ? "The API did not answer in time" : "Network error");
@@ -120,6 +123,41 @@ async function once(path: string, priority: Priority, signal?: AbortSignal): Pro
     clearTimeout(timer);
     signal?.removeEventListener("abort", onAbort);
   }
+}
+
+let rpcId = 0;
+/**
+ * One JSON-RPC call (eth_* methods of the node), on its own budget. No retries: only the tip
+ * watcher uses it, and it falls back to the REST poller while RPC fails.
+ */
+export async function rpc(method: string, params: unknown[] = [], priority: Priority = "live", signal?: AbortSignal): Promise<any> {
+  await acquire(rpcBucket, priority);
+  stats.rpcRequests++;
+  const res = await timedFetch(
+    RPC_API,
+    { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: ++rpcId, method, params }) },
+    priority,
+    signal,
+  );
+  let body: any = null;
+  try {
+    body = await res.json();
+  } catch {
+    /* handled below */
+  }
+  if (res.status === 429 || body?.statusCode === 429) {
+    rpcBucket.pausedUntil = Date.now() + RPC_PAUSE_MS;
+    throw new RateLimitError(RPC_PAUSE_MS / 1000);
+  }
+  if (!res.ok || !body) throw new ApiError(`RPC error ${res.status}`, res.status);
+  if (body.error) throw new ApiError(`RPC error: ${body.error.message ?? body.error.code}`, 400);
+  return body.result;
+}
+
+async function once(path: string, priority: Priority, signal?: AbortSignal): Promise<any> {
+  await acquire(rest, priority);
+  stats.requests++;
+  const res = await timedFetch(/^https?:/.test(path) ? path : PRIMARY_API + path, {}, priority, signal);
   if (res.status === 429) {
     stats.last429 = Date.now();
     startProbe();

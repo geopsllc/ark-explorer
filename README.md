@@ -1,4 +1,4 @@
-# ARK Mainsail Explorer (testnet)
+# Mainsail Explorer (testnet)
 
 A fast, lightweight, self-hostable block explorer for the **ARK Mainsail testnet** (ARK's new BFT, EVM-based chain).
 It is a static site: build it once, copy the `dist/` folder to any webserver, done. There is no backend, database or
@@ -24,7 +24,8 @@ branch.
   - voter count
   - blocks produced
   - missed turns in the last 24 h
-  - forging health: forging, missed (its last turn), or dead (2 missed turns in a row at least ~3.5 min apart, or 3+)
+  - forging health: forging, missed (its last turn), or dead (2 missed turns in a row at least half a rotation, 27
+    turns, apart, or 3+; counted in turns, so a chain stall in between doesn't make a validator look dead)
   - time since its last block
 
   Active, standby and resigned validators are listed separately, and you can filter them by name.
@@ -59,16 +60,17 @@ Mainsail differs from ARK Core in ways an explorer has to follow (all checked ag
 | Every miss pushes the rotation on by one turn, so validators from the start of the order get extra turns (a down validator can get several and miss them all) until the round has its 53 blocks. | Same handling as on Core: Forging View grows by a row per miss. |
 | Rarely a block is committed in a later consensus round than it was proposed in (re-proposed by the next proposer). Those turns are nobody's miss. | Each block is matched to its proposer's turn; turns it skipped show as "–", not as missed. |
 | The API stores each round's validators in proposal order (`/rounds/{n}`), but some stored rounds start at another point of the rotation. | The order is rotated to match the round's real proposers before it is used. |
-| Blocks show up every ~8 s; after a missed proposal the next one takes ~18 s, then ~32 s, ~50 s, ~70 s (consensus timeouts grow each round). | The poller checks shortly after a block is due, then every 2 s, slowing down once the chain looks stalled. Countdowns use the same timings. |
+| Blocks come every 8 s; after a missed proposal the next one takes ~18 s, then ~32 s, ~50 s, ~72 s, ~98 s (consensus timeouts grow each round; medians of 3,000 testnet blocks). | Countdowns and "late" use the same timings. |
+| The REST API runs **one block behind**: block N appears there only once N+1 is committed (~8.7 s after N, or ~18 s / ~30 s when N+1 needed extra rounds). The node's JSON-RPC (`/rpc/api`) has N 1-1.4 s after its timestamp (it is load-balanced over nodes that can be a block apart). | The tip watcher polls `eth_getBlockByNumber("latest")` shortly after each block is due, then every 1.5 s. A new RPC block shows at once as a provisional block of the round (its proposer places it, any turns before count as missed) and triggers a REST poll for the full block before it. Without RPC, REST polling takes over on its own schedule. |
 | Amounts are in wei (18 decimals); fees are `gasUsed × gasPrice`. | All amounts stay exact (BigInt). Dust below 8 decimals is shown in full. |
 
 `npm run test:rounds` replays the testnet's recent rounds through the round logic and checks every block's turn,
 every miss and every skipped turn against what the chain recorded (plus synthetic edge cases).
 
-Requests: normal use costs a few requests per block; the first visit scans the last 24 h for missed turns in the
-background (about 110 requests over a couple of minutes, cached afterwards). Every request goes through a budget
-(170/min, under the API's 200/min per IP) with priorities: the page you are looking at first, then the live poller,
-then background work. One visible tab polls and shares new blocks with your other tabs; hidden tabs stop polling.
+Requests: normal use costs 2-3 RPC and 1-2 REST requests per block; the first visit scans the last 24 h for missed
+turns in the background (about 110 REST requests, 4 at a time: a few seconds, cached afterwards). Every request goes
+through a per-host budget with priorities (the page you are looking at first, then the live poller, then background
+work). One visible tab polls and shares new blocks with your other tabs; hidden tabs stop polling.
 
 ## Install
 
@@ -169,15 +171,18 @@ file. The few settings live in [`src/lib/site.ts`](src/lib/site.ts), and changin
 
 | Constant | Default | Meaning |
 |---|---|---|
-| `TITLE` | `ARK Mainsail Explorer` | Name shown in the header. The browser tab title is in `index.html`. |
+| `TITLE` | `Mainsail Explorer` | Name shown in the header. The browser tab title is in `index.html`. |
 | `SYMBOL` | `TARK` | Currency name shown after amounts. |
-| `REQUEST_BUDGET` | `170` | Requests per minute one browser may send. Keep it under the API's limit of 200 per IP. |
+| `REQUEST_BUDGET` | `600` | REST requests per minute one browser may send (the testnet REST API enforces no limit). |
+| `RPC_BUDGET` | `120` | JSON-RPC requests per minute (the RPC endpoint allows 150 per IP per 60 s). |
 | `MISSED_WINDOW_HOURS` | `24` | How far back missed turns are counted. Each hour costs ~5 extra requests on a visitor's first visit. |
 
-The API's rate limit counts each visitor's IP separately, since requests come from their own browser. Visitors never
-share one quota.
+Rate limits count each visitor's IP separately, since requests come from their own browser. Visitors never share
+one quota.
 
-Known testnet API limits (November 2026): the wallet list ignores `orderBy=balance` (the Wallets page says so when the
+Measured testnet API limits (November 2026): REST answers every request (it sends `x-ratelimit-limit: 200` but
+never counts down; 1,000+ requests a minute went through), with ~180 ms median latency for 100 blocks. JSON-RPC
+allows 150 requests per fixed 60 s window per IP, then answers 429 until the window ends. The wallet list ignores `orderBy=balance` (the Wallets page says so when the
 order comes back unsorted), and `balance.from` only takes values below ~0.009 TARK, so dust can't be filtered out.
 
 ### Develop
@@ -199,7 +204,7 @@ npm run test:rounds   # replay recent testnet rounds through the round logic (ne
 |---|---|
 | `src/lib/api.ts` | Request budget, priorities, timeouts, retries and deep paging |
 | `src/lib/ms.ts` | Mainsail adapter: blocks, transactions (ABI decoding), wallets and validators; EIP-55 checksums |
-| `src/lib/live.svelte.ts` | Block poller, leader tab election, live state and turn timing |
+| `src/lib/live.svelte.ts` | RPC tip watcher, REST block poller, leader tab election, live state and turn timing |
 | `src/lib/chain.ts` | Round math, genesis height and the rounds' proposal orders |
 | `src/lib/roundview.ts` | Who proposes which turn of the round, extra turns, misses, skipped turns and forging health (pure functions) |
 | `src/lib/delegates.svelte.ts` | Validator directory and the missed-turn scan |

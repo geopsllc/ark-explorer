@@ -46,7 +46,7 @@
   const nextIsNewRound = $derived(!!live.round && curSlot + 1 > roundEnd);
   const slotLeft = $derived(slotStartMs(curSlot + 1) - live.now);
   /** no block for 2 minutes (~10 missed turns in a row): the chain has stopped, countdowns mean nothing */
-  const stalled = $derived(!!live.tip && live.now - live.tip.timestamp.unix * 1000 > 120_000);
+  const stalled = $derived(!!live.head && live.now - live.head.ms > 120_000);
 
   // ----- forging health (from missed-slot history) -----
   const health = (d: Delegate) => forgingHealth(d);
@@ -119,8 +119,8 @@
   <div class="stats">
     <div class="stat">
       <div class="label">Height</div>
-      <div class="value">{live.tip ? formatInt(live.tip.height) : "…"}</div>
-      <div class="sub">{live.tip ? ago(live.tip.timestamp.unix, live.now) : "connecting"}</div>
+      <div class="value">{live.head ? formatInt(live.head.height) : "…"}</div>
+      <div class="sub">{live.head ? ago(live.head.ms / 1000, live.now) : "connecting"}</div>
     </div>
     <div class="stat">
       <div class="label">Round</div>
@@ -132,7 +132,7 @@
       <div class="label">Forging now</div>
       <div class="value"><a href="#/wallet/{forgingNow?.address}">{forgingNow?.username ?? "…"}</a></div>
       {#if stalled}
-        <div class="sub warn" title="The chain has made no block since {live.tip ? ago(live.tip.timestamp.unix, live.now) : ''}">chain stalled</div>
+        <div class="sub warn" title="The chain has made no block since {live.head ? ago(live.head.ms / 1000, live.now) : ''}">chain stalled</div>
       {:else}
         <div class="sub next" title={nextUp?.username}><span>next:</span><span class="nname">{nextUp?.username ?? (nextIsNewRound ? "new round" : "…")}</span><span>in {countdown(slotLeft)}</span></div>
       {/if}
@@ -197,7 +197,7 @@
               {@const h = st ? health(d) : null}
               <tr
                 class:current={st?.kind === "forging"}
-                class:flash={st?.kind === "forged" && st.height === live.tip?.height}
+                class:flash={st?.kind === "forged" && st.height === live.head?.height}
                 class:dim={mode === "order" && st?.kind === "forged"}
               >
                 <td class="num faint right">{pos || "–"}</td>

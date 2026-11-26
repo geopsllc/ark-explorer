@@ -4,12 +4,14 @@
  *  - every block lands on a turn whose proposer (by the calibrated order) is the block's proposer;
  *  - the Forging View's missed turns are exactly the misses the blocks record (sum of block.round),
  *    by the same validators that missedBefore() names (which the missed-block scan uses);
- *  - a complete round has 53 blocks and 53 + misses + skipped rows.
+ *  - a complete round has 53 blocks and 53 + misses + skipped rows;
+ *  - a block known only by its proposer (JSON-RPC, before REST has it) gets its consensus round
+ *    right from the order (inferRound), except right after a re-proposal.
  * Plus synthetic rounds for the edge cases (misses at the start, extra turns, a re-proposal).
  *
  *   npm run test:rounds [rounds=20]
  */
-import { buildRound, missedBefore, roundSlots, validatorStatus, type RoundBlock } from "../src/lib/roundview.ts";
+import { addBlock, buildRound, inferRound, missedBefore, roundSlots, validatorStatus, type RoundBlock } from "../src/lib/roundview.ts";
 
 const API = "https://testnet.mainsailhq.com/api";
 const N = 53;
@@ -66,6 +68,7 @@ const roundStart = (r: number) => first + 1 + (r - 1) * N;
 const last = roundOf(tip);
 let totalMisses = 0;
 let totalSkipped = 0;
+let inferred = 0;
 let replayed = 0;
 for (let r = last; r > last - count && r > 0; r--) {
   const start = roundStart(r);
@@ -87,11 +90,22 @@ for (let r = last; r > last - count && r > 0; r--) {
   const scanNames = blocks.flatMap((b) => missedBefore(list, b)).map((a) => a.toLowerCase()).sort();
   const viewNames = missedRows.map((x) => x.pk.toLowerCase()).sort();
   check(JSON.stringify(scanNames) === JSON.stringify(viewNames), `round ${r}: missedBefore and the Forging View disagree`);
+  // provisional blocks: infer each block's consensus round from the round so far plus its proposer
+  const inc = buildRound(r, start, list, []);
+  for (const b of blocks) {
+    const guess = inferRound(inc, b.proposer);
+    const before = Object.keys(inc.skipped).length;
+    addBlock(inc, b);
+    const reproposal = Object.keys(inc.skipped).length > before;
+    if (inc.count > 1 && !reproposal) check(guess === b.round, `round ${r}: block ${b.height} inferred round ${guess}, recorded ${b.round}`);
+    if (inc.count > 1 && !reproposal) inferred++;
+  }
   if (complete) check(rows.length === N + recorded + skipped, `round ${r}: ${rows.length} rows for ${recorded} misses + ${skipped} skipped`);
   console.log(`round ${r}${complete ? "" : " (in progress)"}: ${blocks.length} blocks, ${recorded} misses, ${skipped} skipped turns, ${rows.length} rows`);
   totalMisses += recorded;
   totalSkipped += skipped;
   replayed++;
 }
+console.log(`provisional blocks: ${inferred} consensus rounds inferred from the proposer`);
 console.log(`\n${replayed} rounds, ${totalMisses} misses, ${totalSkipped} skipped turns: ${failures ? `${failures} FAILURES` : "all checks passed"}`);
 process.exit(failures ? 1 : 0);

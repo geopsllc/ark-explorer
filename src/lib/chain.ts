@@ -36,6 +36,13 @@ export const roundStart = (round: number) => chain.genesis + 1 + (round - 1) * c
  * blockTime, then each round's propose / prevote / precommit timeouts grow by 2 s).
  */
 export const roundArrivalMs = (r: number) => 8000 + 10_000 * r + 2000 * r * Math.max(0, r - 1);
+/**
+ * How long after roundArrivalMs(r) a block of round r can still come (p90 − median, measured:
+ * round 0 is always exactly 8 s, round 1 ±2 s, round 2 ±2.5 s, round 3+ ±4 s), plus 1-3.5 s for
+ * the tip watcher to see it (RPC nodes have it 1-1.4 s after its timestamp, a lagging one up to ~3 s).
+ * Until then the turn is "proposing", not yet passed.
+ */
+export const roundGraceMs = (r: number) => (r === 0 ? 3500 : Math.min(6000, 3000 + 700 * r));
 
 let initing: Promise<void> | null = null;
 /** Read the genesis height (cached: it never changes). */

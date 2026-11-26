@@ -9,8 +9,9 @@
  * - Missed blocks: every block says which consensus round it was proposed in, and round r > 0
  *   means the proposers of rounds 0…r-1 missed; the round's proposal order says who they were
  *   (roundview.ts missedBefore). The last MISSED_WINDOW_HOURS (24) are scanned once, 100 blocks
- *   per request (plus one /rounds page per 100 rounds), then kept current from live blocks and
- *   cached, so a returning visitor only scans what is new.
+ *   per request, 4 requests at a time (plus one /rounds page per 100 rounds): ~110 requests, a
+ *   few seconds, since the testnet REST API has no enforced limit. Then it is kept current from
+ *   live blocks and cached, so a returning visitor only scans what is new.
  *
  * Validators are keyed by address (lower case): blocks name their proposer by address and votes
  * name the validator's address. `Delegate.publicKey` holds the address too (see ms.ts).
@@ -197,10 +198,24 @@ async function eventsIn(points: Point[]): Promise<MissedEvent[]> {
   return out;
 }
 
+/** heights of the scan's missed turns, ascending (to count turns between two of them) */
+let missHeights: number[] = [];
+/** missed turns in the scan below `height` */
+function missesBelow(height: number): number {
+  let lo = 0, hi = missHeights.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (missHeights[mid] < height) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
 function recount() {
   if (!scan) return;
   const from = nowMs() - windowMs();
   scan.events = scan.events.filter((e) => e.ms >= from);
+  missHeights = scan.events.map((e) => e.height).sort((a, b) => a - b);
   const counts: Record<string, number> = {};
   const last: Record<string, number> = {};
   for (const e of scan.events) {
@@ -282,6 +297,7 @@ async function catchUp(): Promise<void> {
 }
 
 /** Fill backward down to the start of the window (bulk priority, paused while hidden). */
+const FILL_PARALLEL = 4;
 let filling = false;
 async function fillBack() {
   if (filling) return;
@@ -294,13 +310,22 @@ async function fillBack() {
       }
       try {
         const lo = scan.lo;
-        const pts = await rangeAsc(Math.max(chain.genesis + 1, lo - 100), lo - 1);
+        // the next FILL_PARALLEL ranges of 100 below the scan, read at once, newest first
+        const ranges: [number, number][] = [];
+        for (let i = 0, top = lo - 1; i < FILL_PARALLEL && top > chain.genesis; i++, top -= 100) ranges.push([Math.max(chain.genesis + 1, top - 99), top]);
+        const parts = await Promise.all(ranges.map(([f, t]) => rangeAsc(f, t)));
+        const pts = parts.reverse().flat(); // ascending
         if (!pts.length) break;
+        // a range that came back short would leave a hole: keep only what joins the scan
+        let first = pts.length - 1;
+        while (first > 0 && pts[first - 1].height === pts[first].height - 1) first--;
+        const joined = pts.slice(first);
+        if (joined.at(-1)!.height !== lo - 1) break;
         await enqueue(async () => {
           if (!scan || scan.lo !== lo) return; // the scan was restarted meanwhile
-          scan.events.push(...(await eventsIn(pts)));
-          scan.lo = pts[0].height;
-          scan.loMs = pts[0].ms;
+          scan.events.push(...(await eventsIn(joined)));
+          scan.lo = joined[0].height;
+          scan.loMs = joined[0].ms;
           recount();
         });
       } catch {
@@ -362,13 +387,21 @@ export async function startMissedScan() {
   }
 }
 
-/** Missed turns since the validator's last block (its current streak), oldest first, in ms. */
+/**
+ * Missed turns since the validator's last block (its current streak), oldest first, as positions
+ * in proposal turns: every block number takes one turn plus one per miss before it, so the turn
+ * of miss k at height h is h + (misses below h) + k. Turns, not time: a stalled chain can put
+ * hours between two turns that were only a few turns apart.
+ */
 function missStreak(d: Delegate): number[] {
   const pk = d.publicKey.toLowerCase();
   const lastMissed = missed.lastMissed[pk];
   if (!lastMissed || !scan) return [];
   const lastHeight = d.blocks.last?.height ?? 0;
-  return scan.events.filter((e) => e.pk === pk && e.height > lastHeight).map((e) => e.ms + e.k).sort((a, b) => a - b);
+  return scan.events
+    .filter((e) => e.pk === pk && e.height > lastHeight)
+    .map((e) => e.height + missesBelow(e.height) + e.k)
+    .sort((a, b) => a - b);
 }
 
 /** Missed turns in a row, since the last block. */
@@ -384,8 +417,8 @@ export function forgingHealth(d: Delegate): Health {
   // until the scan covers the latest blocks, "no misses seen" would just mean "not looked yet":
   // show the last known status meanwhile, and "unknown" only if there is none
   if (!missed.current) return lastHealth.get(d.publicKey) ?? "unknown";
-  // streak positions in 8 s turns: half a rotation is ~27 turns (~3.5 min)
-  const h = healthFromStreak(missStreak(d).map((ms) => ms / (chain.blocktime * 1000)), chain.activeDelegates);
+  // streak positions in turns: half a rotation is 27 turns
+  const h = healthFromStreak(missStreak(d), chain.activeDelegates);
   lastHealth.set(d.publicKey, h);
   return h;
 }

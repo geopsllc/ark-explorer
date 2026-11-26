@@ -87,6 +87,25 @@ export function addBlock(r: RoundInfo, b: RoundBlock) {
   r.nextSlot = at + 1;
 }
 
+/** A copy that addBlock can change without touching the original. */
+export function cloneRound(r: RoundInfo): RoundInfo {
+  return { ...r, order: [...r.order], forged: { ...r.forged }, skipped: { ...r.skipped } };
+}
+
+/**
+ * Consensus round of the round's next block when only its proposer is known (JSON-RPC blocks do
+ * not carry it): the proposer's first turn from the next one on, so every turn before it counts
+ * as missed. Right unless the block was re-proposed (rare); the REST block replaces it anyway.
+ * Before the round's first block the order's rotation is not anchored yet, so 0 is assumed.
+ */
+export function inferRound(r: RoundInfo, proposer: string): number {
+  if (r.count === 0) return 0;
+  const n = r.order.length;
+  const p = proposer.toLowerCase();
+  for (let k = 0; k < n; k++) if (r.order[(r.nextSlot + k) % n].toLowerCase() === p) return k;
+  return 0;
+}
+
 /**
  * Last turn that certainly belongs to the round: it still needs `n - count` blocks, so even if
  * every turn after the tip produces one it lasts until tipSlot + (n - count). -1 once complete.
@@ -169,7 +188,7 @@ export function missedBefore(list: string[], b: RoundBlock): string[] {
 }
 
 /**
- * Forging health from the positions (block numbers) of a validator's current streak of missed
+ * Forging health from the positions (proposal turns) of a validator's current streak of missed
  * turns (since its last block), ascending:
  * - forging: produced a block on its last turn;
  * - missed: missed its last turn (a restart or a network hiccup costs one turn);

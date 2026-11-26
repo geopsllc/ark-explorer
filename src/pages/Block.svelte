@@ -70,8 +70,11 @@
   {#if l.state.error}
     <div class="notice" class:error={l.state.error !== "Not found"}>
       {#if l.state.error === "Not found"}
-        {#if /^\d+$/.test(id) && live.tip && Number(id) > live.tip.height}
-          Block #{formatInt(Number(id))} has not been forged yet. This page will update when it is.
+        {#if /^\d+$/.test(id) && live.head && Number(id) <= live.head.height}
+          Block #{formatInt(Number(id))} was just produced. The API has its details a few seconds after the
+          next block; this page will update then.
+        {:else if /^\d+$/.test(id) && live.tip && Number(id) > live.tip.height}
+          Block #{formatInt(Number(id))} has not been produced yet. This page will update when it is.
         {:else}No block with this ID or height.{/if}
       {:else}{l.state.error}{/if}
     </div>

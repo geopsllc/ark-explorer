@@ -115,7 +115,7 @@
     "rate-limited": "Rate limited",
   };
   /** the API answers but no block for over a minute: the chain itself has stopped */
-  const stalled = $derived(live.status === "live" && !!live.tip && live.now - live.tip.timestamp.unix * 1000 > 60_000);
+  const stalled = $derived(live.status === "live" && !!live.head && live.now - live.head.ms > 60_000);
   const statusClass = $derived(stalled ? "warn" : live.status === "live" ? "green" : live.status === "connecting" ? "" : live.status === "offline" ? "red" : "warn");
 </script>
 
@@ -178,7 +178,7 @@
       <span class="pill {statusClass}" title={stalled ? "The API answers, but the chain has made no block for over a minute" : live.error || (live.leader ? "This tab polls the API" : "Another tab polls the API and shares updates")}>
         <span class="dot" class:pulse={live.status === "live" && !stalled}></span>
         {stalled ? "Stalled" : statusText[live.status]}
-        {#if live.tip}<a class="height" href="#/block/{live.tip.height}">#{formatInt(live.tip.height)}</a>{/if}
+        {#if live.head}<a class="height" href="#/block/{live.head.height}">#{formatInt(live.head.height)}</a>{/if}
       </span>
     </div>
   </div>
