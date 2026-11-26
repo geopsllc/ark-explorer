@@ -1,30 +1,31 @@
 /**
- * Delegate directory, voter counts and missed-block tracking.
+ * Validator directory, voter counts and missed-block tracking.
  *
  * Request plan (the public API allows 200 requests/min per IP):
- * - Directory: ~14 pages of 100. Page 1 (ranks 1-100) is loaded first and refreshed once per
- *   round; the rest load in the background and refresh every 30 min. Produced blocks and last
- *   block are updated locally from live blocks, so they are exact between refreshes.
- * - Voter counts (voters with >= 1 ARK): the API has no bulk form, so it is one
- *   `/delegates/{pk}/voters?limit=1&balance.from=1e8` per delegate on screen, 6 at a time, in screen
- *   order, cached for 30 min (51 counts take a few seconds).
- * - Missed blocks: the API has no missed-block data, so it is derived from block timestamps: a
- *   gap between two consecutive blocks means the slots in between were missed, and the forging
- *   order says by whom. The last MISSED_WINDOW_HOURS (24) are scanned once, 100 blocks per request
- *   (~108 requests for 24 h, background priority), then kept current from live blocks and cached,
- *   so a returning visitor only scans what is new.
+ * - Directory: /validators, 2 pages of 100 (the testnet has ~100 validators). Page 1 is loaded
+ *   first and refreshed once per round; the rest loads in the background and refreshes every
+ *   30 min. Produced blocks and last block are updated locally from live blocks, so they are exact
+ *   between refreshes. Voter counts come with the directory (Mainsail keeps them per validator).
+ * - Missed blocks: every block says which consensus round it was proposed in, and round r > 0
+ *   means the proposers of rounds 0…r-1 missed; the round's proposal order says who they were
+ *   (roundview.ts missedBefore). The last MISSED_WINDOW_HOURS (24) are scanned once, 100 blocks
+ *   per request (plus one /rounds page per 100 rounds), then kept current from live blocks and
+ *   cached, so a returning visitor only scans what is new.
+ *
+ * Validators are keyed by address (lower case): blocks name their proposer by address and votes
+ * name the validator's address. `Delegate.publicKey` holds the address too (see ms.ts).
  */
 import { get } from "./api";
 import { MISSED_WINDOW_HOURS, STORE } from "./site";
-import { chain, roundOf, roundOrder, slotAt, slotOf } from "./chain";
-import { healthFromStreak } from "./roundview";
+import { chain, roundOf, roundOrder } from "./chain";
+import { healthFromStreak, missedBefore } from "./roundview";
 import { live, nowMs, onNewBlocks } from "./live.svelte";
 import { load, save } from "./storage";
 import { knownWallet } from "./known.svelte";
+import { mapBlock, mapValidator } from "./ms";
 import type { Block, Delegate } from "./types";
 
 const DIRECTORY_TTL = 30 * 60_000;
-const VOTERS_TTL = 30 * 60_000;
 
 export const dir = $state({
   list: [] as Delegate[],
@@ -38,8 +39,9 @@ const byPk = new Map<string, Delegate>();
 const byAddress = new Map<string, Delegate>();
 const byName = new Map<string, Delegate>();
 
-export const delegateByPk = (pk: string | undefined | null) => (pk ? byPk.get(pk) : undefined);
-export const delegateByAddress = (a: string | undefined | null) => (a ? byAddress.get(a) : undefined);
+/** By address (the key validators have on Mainsail; any letter case). */
+export const delegateByPk = (pk: string | undefined | null) => (pk ? byPk.get(pk.toLowerCase()) : undefined);
+export const delegateByAddress = (a: string | undefined | null) => (a ? byAddress.get(a.toLowerCase()) : undefined);
 export const delegateByName = (n: string) => byName.get(n.toLowerCase());
 /**
  * Display name for an address: the validator's name, else a known wallet's (exchange or team).
@@ -50,18 +52,20 @@ export function nameOf(address: string | undefined | null): string | undefined {
   return delegateByAddress(address)?.username ?? knownWallet(address)?.name;
 }
 
-const dirKey = () => `${STORE}:delegates`;
-const votersKey = () => `${STORE}:voters1`;
+const dirKey = () => `${STORE}:validators`;
 
 function index() {
   byPk.clear();
   byAddress.clear();
   byName.clear();
+  const voters: Record<string, number> = {};
   for (const d of dir.list) {
-    byPk.set(d.publicKey, d);
-    byAddress.set(d.address, d);
+    byPk.set(d.publicKey.toLowerCase(), d);
+    byAddress.set(d.address.toLowerCase(), d);
     byName.set(d.username.toLowerCase(), d);
+    if (typeof d.voters === "number") voters[d.publicKey] = d.voters;
   }
+  dir.voters = voters;
   dir.version++;
 }
 
@@ -86,8 +90,8 @@ function persist() {
 }
 
 async function loadPage(page: number, priority: "interactive" | "background"): Promise<number> {
-  const body = await get(`/delegates?page=${page}&limit=100&orderBy=rank:asc`, priority);
-  merge(body.data as Delegate[]);
+  const body = await get(`/validators?page=${page}&limit=100`, priority);
+  merge((body.data as any[]).map(mapValidator));
   return body.meta?.pageCount ?? 1;
 }
 
@@ -110,15 +114,6 @@ export function startDirectory() {
     index();
   }
   const stale = !cached || Date.now() - cached.at > DIRECTORY_TTL || !cached.complete;
-  // cached voter counts show at once, even expired ones; expired ones are refetched in the background
-  const v = load<{ at: number; counts: Record<string, number> }>(votersKey());
-  if (v?.counts) {
-    dir.voters = v.counts;
-    if (Date.now() - v.at < VOTERS_TTL) {
-      votersAt = v.at;
-      fetched = new Set(Object.keys(v.counts));
-    }
-  }
 
   const refreshTop = () => loadPage(1, cached ? "background" : "interactive").then(() => persist()).catch(() => {});
   if (stale) fullLoad = loadAll().catch(() => {});
@@ -131,7 +126,7 @@ export function startDirectory() {
   let lastRound = 0;
   onNewBlocks((blocks) => {
     for (const b of blocks) {
-      const d = byPk.get(b.generator.publicKey);
+      const d = byPk.get(b.generator.address.toLowerCase());
       if (d && (!d.blocks.last || d.blocks.last.height < b.height)) {
         d.blocks.produced++;
         d.blocks.last = { id: b.id, height: b.height, timestamp: b.timestamp };
@@ -144,67 +139,28 @@ export function startDirectory() {
   });
 }
 
-// ---------- voter counts ----------
-let votersQueue: string[] = [];
-let votersRunning = false;
-let votersAt = 0;
-/** counts fetched in the current TTL period; the others on screen are older and get refetched */
-let fetched = new Set<string>();
-/** Fetch voter counts for these delegates in the background (only ones not cached). */
-const VOTER_WORKERS = 6;
-const VOTER_TRIES = 3;
-
-/**
- * Counts are collected off screen and shown together when the batch is done, so the column fills
- * (or refreshes) in one go instead of row by row. Old counts stay on screen until then.
- */
-export function wantVoters(pks: string[]) {
-  if (votersAt && Date.now() - votersAt > VOTERS_TTL) {
-    fetched = new Set();
-    votersAt = 0;
-  }
-  votersQueue = pks.filter((pk) => !fetched.has(pk));
-  if (votersRunning || !votersQueue.length) return;
-  votersRunning = true;
-  const batch: Record<string, number> = {};
-  const tries: Record<string, number> = {};
-  const worker = async () => {
-    while (votersQueue.length) {
-      const pk = votersQueue.shift()!;
-      if (fetched.has(pk)) continue;
-      try {
-        // like ArkScan: only voters holding at least 1 ARK (dust wallets would more than double the count)
-        const body = await get(`/delegates/${pk}/voters?limit=1&balance.from=100000000`, "background");
-        batch[pk] = body.meta?.totalCount ?? 0;
-        fetched.add(pk);
-      } catch {
-        // retry a few times so one failed request doesn't leave a gap in the column
-        if ((tries[pk] = (tries[pk] ?? 0) + 1) < VOTER_TRIES) votersQueue.push(pk);
-        await new Promise((r) => setTimeout(r, 2000));
-      }
-    }
-  };
-  // a few at a time: 51 counts in a few seconds instead of ~20 s one by one
-  Promise.all(Array.from({ length: VOTER_WORKERS }, worker)).finally(() => {
-    votersRunning = false;
-    if (!Object.keys(batch).length) return;
-    if (!votersAt) votersAt = Date.now();
-    dir.voters = { ...dir.voters, ...batch };
-    save(votersKey(), { at: votersAt, counts: $state.snapshot(dir.voters) });
-  });
-}
-
 // ---------- missed blocks ----------
 interface MissedEvent {
-  slot: number;
-  height: number; // the height that was being forged
+  /** time of the block whose number was being decided (ms) */
+  ms: number;
+  height: number;
+  /** consensus round that was missed */
+  k: number;
+  /** validator address, lower case */
   pk: string;
+}
+/** A scanned block: just what the scan needs. */
+interface Point {
+  height: number;
+  ms: number;
+  round: number;
+  proposer: string;
 }
 interface ScanState {
   lo: number; // lowest scanned height
-  loSlot: number;
+  loMs: number;
   hi: number; // highest scanned height
-  hiSlot: number;
+  hiMs: number;
   events: MissedEvent[];
 }
 
@@ -213,8 +169,9 @@ export const missed = $state({
   progress: 0,
   ready: false,
   windowHours: 24,
+  /** by validator address, lower case */
   counts: {} as Record<string, number>,
-  /** latest missed slot per delegate */
+  /** latest missed turn per validator (ms) */
   lastMissed: {} as Record<string, number>,
   total: 0,
   /** the scan reaches the tip: health dots are only shown while this holds */
@@ -223,58 +180,50 @@ export const missed = $state({
 
 const scanKey = () => `${STORE}:missed`;
 let scan: ScanState | null = null;
-// Like Core's detectMissedBlocks: a gap records at most activeDelegates misses, the first ones after
-// the previous block (a longer gap is a network stall, not 51+ individual failures).
-const MAX_GAP = 51;
 
-const windowSlots = () => Math.round((MISSED_WINDOW_HOURS * 3600) / chain.blocktime);
+const windowMs = () => MISSED_WINDOW_HOURS * 3600_000;
+/** the newest round there is (so a missing round order is fetched with its whole /rounds page) */
+const latestRound = () => (live.tip ? roundOf(live.tip.height) : 0);
 
-async function gapEvents(a: { height: number; slot: number }, b: { height: number; slot: number }): Promise<MissedEvent[]> {
-  if (b.slot - a.slot <= 1) return [];
-  const order = await roundOrder(roundOf(b.height), "bulk");
+async function eventsIn(points: Point[]): Promise<MissedEvent[]> {
   const out: MissedEvent[] = [];
-  // the missing block would have had b's height, so b's round order decides who missed (Core uses the
-  // round state at that height too, which is the next round right after a round's last block)
-  for (let s = a.slot + 1; s < Math.min(b.slot, a.slot + 1 + MAX_GAP); s++) {
-    out.push({ slot: s, height: b.height, pk: order[s % chain.activeDelegates] });
-  }
-  return out;
-}
-
-async function eventsIn(blocks: { height: number; slot: number }[]): Promise<MissedEvent[]> {
-  const out: MissedEvent[] = [];
-  for (let i = 1; i < blocks.length; i++) {
-    if (blocks[i].height === blocks[i - 1].height + 1) out.push(...(await gapEvents(blocks[i - 1], blocks[i])));
+  for (const p of points) {
+    if (!p.round) continue;
+    const list = await roundOrder(roundOf(p.height), "bulk", latestRound());
+    missedBefore(list, { height: p.height, id: "", proposer: p.proposer, round: p.round }).forEach((a, k) =>
+      out.push({ ms: p.ms, height: p.height, k, pk: a.toLowerCase() }),
+    );
   }
   return out;
 }
 
 function recount() {
   if (!scan) return;
-  const from = slotAt(nowMs()) - windowSlots();
-  scan.events = scan.events.filter((e) => e.slot >= from);
+  const from = nowMs() - windowMs();
+  scan.events = scan.events.filter((e) => e.ms >= from);
   const counts: Record<string, number> = {};
   const last: Record<string, number> = {};
   for (const e of scan.events) {
     counts[e.pk] = (counts[e.pk] ?? 0) + 1;
-    last[e.pk] = Math.max(last[e.pk] ?? 0, e.slot);
+    last[e.pk] = Math.max(last[e.pk] ?? 0, e.ms);
   }
   missed.counts = counts;
   missed.lastMissed = last;
   missed.total = scan.events.length;
-  const span = Math.max(0, scan.hiSlot - Math.max(scan.loSlot, from));
-  missed.progress = Math.min(1, span / windowSlots());
-  if (scan.loSlot <= from) missed.progress = 1;
+  // share of the window's blocks scanned (a stalled chain has none after its tip)
+  const span = Math.max(0, scan.hiMs - Math.max(scan.loMs, from));
+  missed.progress = Math.min(1, span / Math.max(1, scan.hiMs - from));
+  if (scan.loMs <= from || scan.lo <= chain.genesis + 1) missed.progress = 1;
   missed.ready = missed.progress >= 1;
   missed.current = !!live.tip && live.tip.height - scan.hi <= 2;
   save(scanKey(), scan);
 }
 
-const toPoint = (b: Block) => ({ height: b.height, slot: slotOf(b.timestamp.epoch) });
+const toPoint = (b: Block): Point => ({ height: b.height, ms: b.timestamp.unix * 1000, round: b.round, proposer: b.generator.address });
 
 async function rangeAsc(from: number, to: number, priority: "bulk" | "background" = "bulk") {
-  const body = await get(`/blocks?height.from=${from}&height.to=${to}&orderBy=height:asc&limit=100`, priority);
-  return (body.data as Block[]).map(toPoint);
+  const body = await get(`/blocks?number.from=${from}&number.to=${to}&orderBy=number:asc&limit=100`, priority);
+  return (body.data as any[]).map(mapBlock).map(toPoint);
 }
 
 let scanning = false;
@@ -287,25 +236,28 @@ const enqueue = (fn: () => Promise<void>) => (queue = queue.then(fn).catch(() =>
 async function freshScan(): Promise<boolean> {
   const tip = live.tip;
   if (!tip) return false;
-  const pts = await rangeAsc(Math.max(1, tip.height - 99), tip.height, "background");
+  const pts = await rangeAsc(Math.max(chain.genesis + 1, tip.height - 99), tip.height, "background");
   if (!pts.length) return false;
-  scan = { lo: pts[0].height, loSlot: pts[0].slot, hi: pts.at(-1)!.height, hiSlot: pts.at(-1)!.slot, events: await eventsIn(pts) };
+  scan = { lo: pts[0].height, loMs: pts[0].ms, hi: pts.at(-1)!.height, hiMs: pts.at(-1)!.ms, events: await eventsIn(pts) };
   recount();
   return true;
 }
 
 /** Append blocks above scan.hi, if they continue it without a gap. */
-async function extend(points: { height: number; slot: number }[]): Promise<boolean> {
+async function extend(points: Point[]): Promise<boolean> {
   if (!scan) return false;
   const pts = points.filter((p) => p.height > scan!.hi);
   if (!pts.length) return true;
   if (pts[0].height !== scan.hi + 1) return false;
-  scan.events.push(...(await eventsIn([{ height: scan.hi, slot: scan.hiSlot }, ...pts])));
+  scan.events.push(...(await eventsIn(pts)));
   scan.hi = pts.at(-1)!.height;
-  scan.hiSlot = pts.at(-1)!.slot;
+  scan.hiMs = pts.at(-1)!.ms;
   recount();
   return true;
 }
+
+/** Blocks in a full window at most (8 s each), to tell when filling a gap is not worth it. */
+const windowBlocks = () => Math.round(windowMs() / 1000 / chain.blocktime);
 
 /**
  * Bring the scan up to the tip. Runs on start and after ANY gap: a hidden tab or a sleeping laptop
@@ -314,7 +266,7 @@ async function extend(points: { height: number; slot: number }[]): Promise<boole
 async function catchUp(): Promise<void> {
   for (let tries = 0; scan && live.tip && scan.hi < live.tip.height && tries < 50; ) {
     // too far behind to fill (more than the window): start over from the tip
-    if (live.tip.height - scan.hi > windowSlots()) {
+    if (live.tip.height - scan.hi > windowBlocks()) {
       if (!(await freshScan())) return;
       fillBack();
       continue;
@@ -335,20 +287,20 @@ async function fillBack() {
   if (filling) return;
   filling = true;
   try {
-    while (scan && scan.lo > 1 && scan.loSlot > slotAt(nowMs()) - windowSlots()) {
+    while (scan && scan.lo > chain.genesis + 1 && scan.loMs > nowMs() - windowMs()) {
       if (document.hidden) {
         await new Promise((r) => setTimeout(r, 3000));
         continue;
       }
       try {
         const lo = scan.lo;
-        const pts = await rangeAsc(Math.max(1, lo - 100), lo - 1);
+        const pts = await rangeAsc(Math.max(chain.genesis + 1, lo - 100), lo - 1);
         if (!pts.length) break;
         await enqueue(async () => {
           if (!scan || scan.lo !== lo) return; // the scan was restarted meanwhile
-          scan.events.push(...(await eventsIn([...pts, { height: scan.lo, slot: scan.loSlot }])));
+          scan.events.push(...(await eventsIn(pts)));
           scan.lo = pts[0].height;
-          scan.loSlot = pts[0].slot;
+          scan.loMs = pts[0].ms;
           recount();
         });
       } catch {
@@ -368,7 +320,7 @@ export async function startMissedScan() {
   scanning = true;
   scan = load<ScanState>(scanKey());
   // stale or broken cache: start over
-  if (!scan || scan.hi > tip.height || tip.height - scan.hi > windowSlots()) scan = null;
+  if (!scan || typeof scan.hiMs !== "number" || scan.hi > tip.height || tip.height - scan.hi > windowBlocks()) scan = null;
   await enqueue(async () => {
     if (!scan && !(await freshScan())) return;
     recount();
@@ -405,22 +357,21 @@ export async function startMissedScan() {
       enqueue(async () => {
         if (!scan) return;
         scan.hi -= n;
-        scan.hiSlot -= n;
         scan.events = scan.events.filter((e) => e.height <= scan!.hi);
       });
   }
 }
 
-/** Missed turns since the delegate's last forged block (its current streak), oldest first. */
+/** Missed turns since the validator's last block (its current streak), oldest first, in ms. */
 function missStreak(d: Delegate): number[] {
-  const lastMissed = missed.lastMissed[d.publicKey];
+  const pk = d.publicKey.toLowerCase();
+  const lastMissed = missed.lastMissed[pk];
   if (!lastMissed || !scan) return [];
-  const lastForged = d.blocks.last ? slotOf(d.blocks.last.timestamp.epoch) : 0;
-  if (lastMissed < lastForged) return [];
-  return scan.events.filter((e) => e.pk === d.publicKey && e.slot > lastForged).map((e) => e.slot).sort((a, b) => a - b);
+  const lastHeight = d.blocks.last?.height ?? 0;
+  return scan.events.filter((e) => e.pk === pk && e.height > lastHeight).map((e) => e.ms + e.k).sort((a, b) => a - b);
 }
 
-/** Missed turns in a row, since the last forged block. */
+/** Missed turns in a row, since the last block. */
 export function missedSinceLastBlock(d: Delegate): number {
   return missStreak(d).length;
 }
@@ -433,7 +384,11 @@ export function forgingHealth(d: Delegate): Health {
   // until the scan covers the latest blocks, "no misses seen" would just mean "not looked yet":
   // show the last known status meanwhile, and "unknown" only if there is none
   if (!missed.current) return lastHealth.get(d.publicKey) ?? "unknown";
-  const h = healthFromStreak(missStreak(d), chain.activeDelegates);
+  // streak positions in 8 s turns: half a rotation is ~27 turns (~3.5 min)
+  const h = healthFromStreak(missStreak(d).map((ms) => ms / (chain.blocktime * 1000)), chain.activeDelegates);
   lastHealth.set(d.publicKey, h);
   return h;
 }
+
+/** Missed turns in the window, by address. */
+export const missedCount = (address: string | undefined | null) => (address ? (missed.counts[address.toLowerCase()] ?? 0) : 0);

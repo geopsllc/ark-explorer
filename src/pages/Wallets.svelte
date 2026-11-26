@@ -9,24 +9,24 @@
   import { formatInt } from "../lib/format";
   import { loader } from "../lib/loader.svelte";
   import { route, setQuery } from "../lib/router.svelte";
+  import { mapWallet } from "../lib/ms";
   import type { Wallet } from "../lib/types";
 
-  // The API's balance-ordered wallet list is fast at any depth once dust is filtered out
-  // (≥1 ARK: ~34k wallets, page 900 in ~1.3 s); unfiltered it has ~207k rows and deep pages time out.
+  // The testnet has ~42k wallets. A balance filter can't help here: the API takes `balance.from`
+  // only as a safe integer (below ~0.009 TARK in wei), so the list is unfiltered.
   const SIZE = 25;
-  const MIN_BALANCE = 100_000_000; // 1 ARK
   const page = $derived(Math.max(1, parseInt(route.query.page ?? "1", 10) || 1));
   let total = $state(0);
   let supply = $state(0n);
 
   const l = loader(async (signal) => {
     const [body, chain] = await Promise.all([
-      get(`/wallets?balance.from=${MIN_BALANCE}&orderBy=balance:desc&page=${page}&limit=${SIZE}`, "interactive", signal),
+      get(`/wallets?orderBy=balance:desc&page=${page}&limit=${SIZE}`, "interactive", signal),
       supply ? null : get("/blockchain", "interactive", signal).catch(() => null),
     ]);
     total = body.meta?.totalCount ?? 0;
     if (chain?.data?.supply) supply = BigInt(chain.data.supply);
-    return body.data as Wallet[];
+    return (body.data as any[]).map(mapWallet) as Wallet[];
   });
   onDestroy(() => l.destroy());
   $effect(() => {
@@ -35,6 +35,8 @@
   });
 
   const pages = $derived(Math.max(1, Math.ceil(total / SIZE)));
+  /** whether the API honoured the balance order (the testnet API ignores it, Nov 2026) */
+  const sorted = $derived((l.state.data ?? []).every((w, i, a) => i === 0 || BigInt(a[i - 1].balance) >= BigInt(w.balance)));
   const share = (balance: string) => (supply > 0n ? Number((BigInt(balance) * 1_000_000n) / supply) / 10_000 : 0);
 </script>
 
@@ -42,7 +44,9 @@
   <div class="page-head">
     <div>
       <h1>Wallets</h1>
-      <p>{#if total}{formatInt(total)} with 1<Sym /> or more{/if}</p>
+      <p>
+        {#if total}{formatInt(total)} wallets{#if sorted}, largest first{:else}<span class="warn" title="The Mainsail testnet API ignores orderBy=balance:desc for now (Nov 2026): wallets come in the API's own order"> · not sorted by balance (the API ignores the order for now)</span>{/if}{/if}
+      </p>
     </div>
   </div>
   <div class="card">

@@ -1,9 +1,9 @@
 <script lang="ts">
   import Sym from "../components/Sym.svelte";
   import { SYMBOL } from "../lib/site";
-  import { chain, slotAt, slotOf, slotStartMs } from "../lib/chain";
-  import { live } from "../lib/live.svelte";
-  import { dir, forgingHealth, missed, wantVoters } from "../lib/delegates.svelte";
+  import { chain } from "../lib/chain";
+  import { currentSlot, live, slotStartMs as turnStartMs } from "../lib/live.svelte";
+  import { dir, forgingHealth, missed, missedCount } from "../lib/delegates.svelte";
   import { ago, agoShort, arkCompact, countdown, formatInt } from "../lib/format";
   import { untrack } from "svelte";
   import type { Delegate } from "../lib/types";
@@ -22,23 +22,31 @@
   const active = $derived(dir.list.filter((d) => !d.isResigned && d.rank > 0 && d.rank <= n));
   const standby = $derived(dir.list.filter((d) => !d.isResigned && !(d.rank > 0 && d.rank <= n)));
   const resigned = $derived(dir.list.filter((d) => d.isResigned));
-  const byPk = $derived(new Map(dir.list.map((d) => [d.publicKey, d])));
+  const byPk = $derived(new Map(dir.list.map((d) => [d.publicKey.toLowerCase(), d])));
 
-  const curSlot = $derived(slotAt(live.now));
-  const tipSlot = $derived(live.tip ? slotOf(live.tip.timestamp.epoch) : 0);
+  // Mainsail has no time slots: a "slot" is one proposal turn of the round (see lib/roundview.ts)
+  const curSlot = $derived((void live.round?.count, currentSlot(live.now)));
+  const tipSlot = $derived(live.round ? live.round.tipSlot : -1);
+  const slotStartMs = (s: number) => turnStartMs(s, live.now);
 
   // ----- round status (rules and edge cases in lib/roundview.ts) -----
   type RoundStatus = TurnStatus;
   const roundEnd = $derived(live.round ? roundEndSlot(live.round, tipSlot, n) : -1);
   /** Rank View: one status per validator */
-  const roundStatus = $derived(live.round ? validatorStatus(live.round, tipSlot, curSlot, n) : new Map<string, TurnStatus>());
+  const roundStatus = $derived.by(() => {
+    const m = live.round ? validatorStatus(live.round, tipSlot, curSlot, n) : new Map<string, TurnStatus>();
+    return new Map([...m].map(([k, v]) => [k.toLowerCase(), v]));
+  });
+  const roundStatusOf = (address: string) => roundStatus.get(address.toLowerCase());
   /** Forging View: one row per slot; grows by one row per missed slot */
   const slotRows = $derived(live.round ? roundSlots(live.round, tipSlot, curSlot, n) : []);
-  const forgingNow = $derived(live.round ? byPk.get(forgerOf(live.round, curSlot, tipSlot, n) ?? "") : undefined);
-  const nextUp = $derived(live.round ? byPk.get(forgerOf(live.round, curSlot + 1, tipSlot, n) ?? "") : undefined);
+  const forgingNow = $derived(live.round ? byPk.get(forgerOf(live.round, curSlot, tipSlot, n)?.toLowerCase() ?? "") : undefined);
+  const nextUp = $derived(live.round ? byPk.get(forgerOf(live.round, curSlot + 1, tipSlot, n)?.toLowerCase() ?? "") : undefined);
   /** the slot after this one starts a new round (if the blocks in flight arrive) */
   const nextIsNewRound = $derived(!!live.round && curSlot + 1 > roundEnd);
   const slotLeft = $derived(slotStartMs(curSlot + 1) - live.now);
+  /** no block for 2 minutes (~10 missed turns in a row): the chain has stopped, countdowns mean nothing */
+  const stalled = $derived(!!live.tip && live.now - live.tip.timestamp.unix * 1000 > 120_000);
 
   // ----- forging health (from missed-slot history) -----
   const health = (d: Delegate) => forgingHealth(d);
@@ -61,7 +69,7 @@
   const rows = $derived.by(() => {
     if (mode === "order") {
       return slotRows
-        .map(({ slot, pk, st }, i) => ({ pos: i + 1, d: byPk.get(pk), key: `s${slot}`, st }))
+        .map(({ slot, pk, st }, i) => ({ pos: i + 1, d: byPk.get(pk.toLowerCase()), key: `s${slot}`, st }))
         .filter((r) => r.d) as { pos: number; d: Delegate; key: string; st?: RoundStatus }[];
     }
     const src = tab === "active" ? active : tab === "standby" ? standby : resigned;
@@ -76,11 +84,6 @@
     void tab;
     void filter;
     page = 1;
-  });
-  $effect(() => {
-    const pks = visible.map((r) => r.d.publicKey);
-    const t = setTimeout(() => wantVoters(pks), 200);
-    return () => clearTimeout(t);
   });
 
   // A new round reorders every row. Browsers keep the row under your eye in view ("scroll
@@ -128,13 +131,17 @@
     <div class="stat">
       <div class="label">Forging now</div>
       <div class="value"><a href="#/wallet/{forgingNow?.address}">{forgingNow?.username ?? "…"}</a></div>
-      <div class="sub next" title={nextUp?.username}><span>next:</span><span class="nname">{nextUp?.username ?? (nextIsNewRound ? "new round" : "…")}</span><span>in {countdown(slotLeft)}</span></div>
+      {#if stalled}
+        <div class="sub warn" title="The chain has made no block since {live.tip ? ago(live.tip.timestamp.unix, live.now) : ''}">chain stalled</div>
+      {:else}
+        <div class="sub next" title={nextUp?.username}><span>next:</span><span class="nname">{nextUp?.username ?? (nextIsNewRound ? "new round" : "…")}</span><span>in {countdown(slotLeft)}</span></div>
+      {/if}
     </div>
     <div class="stat">
       <div class="label">Forging status</div>
       <div class="health">
         <div title="Forging"><div class="value green">{healthCounts ? healthCounts.forging : "…"}</div><div class="sub">forging</div></div>
-        <div title="Missed their last slot"><div class="value warn">{healthCounts ? healthCounts.missed : "…"}</div><div class="sub">missed</div></div>
+        <div title="Missed their last turn"><div class="value warn">{healthCounts ? healthCounts.missed : "…"}</div><div class="sub">missed</div></div>
         <div title="Missed several turns in a row over at least ~3.5 minutes"><div class="value red">{healthCounts ? healthCounts["not-forging"] : "…"}</div><div class="sub">dead</div></div>
       </div>
     </div>
@@ -178,15 +185,15 @@
               {#if mode === "order"}<th class="right c-rank">Rank</th>{/if}
               <th class="right c-votes" title="Votes ({SYMBOL})">Votes</th>
               <th class="right c-pct">%</th>
-              <th class="right c-voters" title="Voters holding at least 1 {SYMBOL}">Voters</th>
+              <th class="right c-voters" title="Wallets voting for the validator">Voters</th>
               <th class="right c-blocks" title="Blocks produced">Blocks</th>
-              <th class="right c-missed" title="Missed slots in the last {missed.windowHours} hours">Missed</th>
+              <th class="right c-missed" title="Missed turns in the last {missed.windowHours} hours">Missed</th>
               <th class="right c-last" title="Time since the last forged block">Last</th>
             </tr>
           </thead>
           <tbody>
             {#each visible as { pos, d, key, st: slotSt } (key)}
-              {@const st = slotSt ?? roundStatus.get(d.publicKey)}
+              {@const st = slotSt ?? roundStatusOf(d.publicKey)}
               {@const h = st ? health(d) : null}
               <tr
                 class:current={st?.kind === "forging"}
@@ -204,15 +211,17 @@
                   {#if !st}
                     <span class="faint">–</span>
                   {:else if st.kind === "forged"}
-                    <a class="pill rp green" href="#/block/{st.height}" title={st.blocks > 1 ? `Forged ${st.blocks} blocks this round (extra turns after missed slots); last #${formatInt(st.height)}` : `Forged block #${formatInt(st.height)}`}>{formatInt(st.height)}{#if st.blocks > 1}<span class="times">×{st.blocks}</span>{/if}</a>
+                    <a class="pill rp green" href="#/block/{st.height}" title={st.blocks > 1 ? `Forged ${st.blocks} blocks this round (extra turns after missed turns); last #${formatInt(st.height)}` : `Forged block #${formatInt(st.height)}`}>{formatInt(st.height)}{#if st.blocks > 1}<span class="times">×{st.blocks}</span>{/if}</a>
                   {:else if st.kind === "forging"}
                     <span class="pill rp accent" title={st.turn > 1 ? `Forging now (turn ${st.turn} this round)` : "Forging now"}><span class="dot pulse"></span>Now{#if st.turn > 1}<span class="times">#{st.turn}</span>{/if}</span>
                   {:else if st.kind === "late"}
-                    <span class="pill rp warn" title="Slot passed, block not seen yet"><span class="dot pulse"></span>Late</span>
+                    <span class="pill rp warn" title="Its turn timed out, block not seen yet"><span class="dot pulse"></span>Late</span>
+                  {:else if st.kind === "skipped"}
+                    <span class="pill rp" title="Turn passed while another proposer's block was being re-proposed: not a miss">–</span>
                   {:else if st.kind === "missed"}
-                    <span class="pill rp red" title={st.misses > 1 ? `Missed ${st.misses} turns this round` : "Missed its slot"}>Missed{#if st.misses > 1}<span class="times">×{st.misses}</span>{/if}</span>
+                    <span class="pill rp red" title={st.misses > 1 ? `Missed ${st.misses} turns this round` : "Missed its turn"}>Missed{#if st.misses > 1}<span class="times">×{st.misses}</span>{/if}</span>
                   {:else}
-                    <span class="pill rp" class:accent={st.next} title={(st.turn > 1 ? `Extra turn ${st.turn}: the round runs long after missed slots. ` : "") + (st.next ? "Forges next" : "Time until its slot")}>{countdown(slotStartMs(st.slot) - live.now)}{#if st.turn > 1}<span class="times">#{st.turn}</span>{/if}</span>
+                    <span class="pill rp" class:accent={st.next} title={(st.turn > 1 ? `Extra turn ${st.turn}: the round runs long after missed turns. ` : "") + (stalled ? "Waiting: the chain has stalled" : st.next ? "Proposes next" : "Expected time until its turn (if every turn before it produces a block)")}>{stalled ? "Waiting" : countdown(slotStartMs(st.slot) - live.now)}{#if st.turn > 1}<span class="times">#{st.turn}</span>{/if}</span>
                   {/if}
                 </td>
                 {#if mode === "order"}<td class="num muted right c-rank">{d.rank}</td>{/if}
@@ -220,7 +229,7 @@
                 <td class="right muted c-pct">{pct(d)}</td>
                 <td class="right c-voters">{dir.voters[d.publicKey] !== undefined ? formatInt(dir.voters[d.publicKey]) : ""}{#if dir.voters[d.publicKey] === undefined}<span class="skeleton" style="width:30px"></span>{/if}</td>
                 <td class="right c-blocks">{formatInt(d.blocks.produced)}</td>
-                <td class="right c-missed" class:warn={(missed.counts[d.publicKey] ?? 0) > 0}>{missed.progress > 0 ? (missed.counts[d.publicKey] ?? 0) : ""}</td>
+                <td class="right c-missed" class:warn={missedCount(d.publicKey) > 0}>{missed.progress > 0 ? missedCount(d.publicKey) : ""}</td>
                 <td class="right c-last">
                   {#if d.blocks.last}
                     <a href="#/block/{d.blocks.last.height}" title="#{formatInt(d.blocks.last.height)} · {ago(d.blocks.last.timestamp.unix, live.now)}">{agoShort(d.blocks.last.timestamp.unix, live.now)}</a>

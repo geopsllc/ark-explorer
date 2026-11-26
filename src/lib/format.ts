@@ -1,33 +1,37 @@
-export const ARKTOSHI = 100_000_000n;
+/** Amounts are in wei: 18 decimals (Mainsail is an EVM chain). */
+export const DECIMALS = 18;
+export const ARKTOSHI = 10n ** BigInt(DECIMALS);
 
 function group(int: string): string {
   return int.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 }
 
-/** Format an arktoshi amount as a decimal ARK string. */
+/** Format a wei amount as a decimal TARK string (at most `maxDecimals` decimals, cut, not rounded). */
 export function formatArk(value: string | bigint | null | undefined, maxDecimals = 8, minDecimals = 2): string {
   if (value === null || value === undefined || value === "") return "0";
   let v = typeof value === "bigint" ? value : BigInt(value);
   const neg = v < 0n;
   if (neg) v = -v;
   const int = v / ARKTOSHI;
-  let frac = (v % ARKTOSHI).toString().padStart(8, "0").slice(0, maxDecimals);
+  let frac = (v % ARKTOSHI).toString().padStart(DECIMALS, "0").slice(0, maxDecimals);
   frac = frac.replace(/0+$/, "");
   while (frac.length < Math.min(minDecimals, maxDecimals)) frac += "0";
   return (neg ? "-" : "") + group(int.toString()) + (frac ? "." + frac : "");
 }
 
-/** Parse a user-entered ARK amount into arktoshi. Returns null if invalid. */
+/** Parse a user-entered amount into wei. Returns null if invalid. */
 export function parseArk(input: string): bigint | null {
   const s = input.trim().replace(/,/g, "");
-  if (!/^\d*(\.\d{0,8})?$/.test(s) || s === "" || s === ".") return null;
+  if (!/^\d*(\.\d{0,18})?$/.test(s) || s === "" || s === ".") return null;
   const [i, f = ""] = s.split(".");
-  return BigInt(i || "0") * ARKTOSHI + BigInt((f + "00000000").slice(0, 8));
+  return BigInt(i || "0") * ARKTOSHI + BigInt((f + "0".repeat(DECIMALS)).slice(0, DECIMALS));
 }
 
 export function arkToNumber(v: string | bigint | null | undefined): number {
   if (v === null || v === undefined || v === "") return 0;
-  return Number(typeof v === "bigint" ? v : BigInt(v)) / 1e8;
+  const b = typeof v === "bigint" ? v : BigInt(v);
+  // split first: wei amounts are past Number's exact range
+  return Number(b / ARKTOSHI) + Number(b % ARKTOSHI) / 1e18;
 }
 
 export function formatFiat(n: number, currency: string): string {
@@ -92,12 +96,14 @@ export function formatInt(n: number | null | undefined): string {
   return n === null || n === undefined ? "–" : n.toLocaleString("en-US");
 }
 
-/** Compact ARK amount for tables: 1,234,567 / 12.34 / 0.0012 */
+/** Compact amount for tables: 1,234,567 / 12.34 / 0.0012 */
 export function arkCompact(value: string | bigint | null | undefined): string {
   const n = arkToNumber(value);
   if (n >= 1000) return Math.round(n).toLocaleString("en-US");
   if (n >= 1) return n.toLocaleString("en-US", { maximumFractionDigits: 2 });
-  return formatArk(value, 8, 0);
+  // dust below 8 decimals (wei amounts) shows in full rather than as "0"
+  const short = formatArk(value, 8, 0);
+  return short === "0" || short === "-0" ? formatArk(value, 18, 0) : short;
 }
 
 /** Shortest age: "45s", "8m", "3h", "2d". */

@@ -8,6 +8,8 @@
   import { loader } from "../lib/loader.svelte";
   import { route, setQuery } from "../lib/router.svelte";
   import { ago, agoShort, arkCompact, formatInt } from "../lib/format";
+  import { chain } from "../lib/chain";
+  import { mapBlock } from "../lib/ms";
   import type { Block } from "../lib/types";
 
   const SIZE = 25;
@@ -15,14 +17,14 @@
   // deeper pages are pinned to the height they were opened at, so rows don't shift under you
   let anchor = $state(parseInt(route.query.from ?? "0", 10) || 0);
 
-  // "latest blocks" queries are slow on the API (~2.7 s, frequent 500s); height ranges take ~0.2 s
+  // block lists are read by number range: cheap and exact at any depth
   const l = loader(async (signal) => {
     const top = anchor || live.tip?.height || 0;
     const hi = top - (page - 1) * SIZE;
-    const lo = Math.max(1, hi - SIZE + 1);
-    if (hi < 1) return [] as Block[];
-    const body = await get(`/blocks?height.from=${lo}&height.to=${hi}&orderBy=height:desc&limit=${SIZE}`, "interactive", signal);
-    return body.data as Block[];
+    const lo = Math.max(chain.genesis, hi - SIZE + 1);
+    if (hi < chain.genesis) return [] as Block[];
+    const body = await get(`/blocks?number.from=${lo}&number.to=${hi}&orderBy=number:desc&limit=${SIZE}`, "interactive", signal);
+    return (body.data as any[]).map(mapBlock);
   });
   onDestroy(() => l.destroy());
 
@@ -41,7 +43,7 @@
   });
 
   const rows = $derived(page === 1 ? live.blocks.slice(0, SIZE) : (l.state.data ?? []));
-  const pages = $derived(Math.ceil((anchor || live.tip?.height || 0) / SIZE));
+  const pages = $derived(Math.ceil(Math.max(0, (anchor || live.tip?.height || 0) - chain.genesis + 1) / SIZE));
 
   function goPage(p: number) {
     if (p === 1) {
@@ -73,7 +75,7 @@
             <th>Age</th>
             <th>Forged by</th>
             <th class="right"><span class="wide-only">Transactions</span><span class="narrow-only">Txs</span></th>
-            <th class="right b-amount">Amount</th>
+            <th class="right b-amount" title="Proposers that missed before this block was made (its consensus round)">Missed</th>
             <th class="right b-fees">Fees</th>
             <th class="right b-reward">Reward</th>
           </tr>
@@ -85,7 +87,7 @@
               <td class="muted"><span class="wide-only">{ago(b.timestamp.unix, live.now)}</span><span class="narrow-only">{agoShort(b.timestamp.unix, live.now)}</span></td>
               <td><span class="trunc forger" style="--trunc:150px"><Addr address={b.generator.address} /></span></td>
               <td class="right" class:faint={!b.transactions}>{b.transactions}</td>
-              <td class="right b-amount">{arkCompact(b.forged.amount)}<Sym /></td>
+              <td class="right b-amount" class:faint={!b.round} class:warn={b.round > 0}>{b.round}</td>
               <td class="right muted b-fees">{arkCompact(b.forged.fee)}<Sym /></td>
               <td class="right muted b-reward">{arkCompact(b.forged.reward)}<Sym /></td>
             </tr>

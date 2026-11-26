@@ -10,19 +10,20 @@
   import { delegateByPk } from "../lib/delegates.svelte";
   import { ago, formatDate, formatInt } from "../lib/format";
   import { txAmount, txTypeName, txVotes } from "../lib/txinfo";
-  import type { Transaction } from "../lib/types";
+  import { mapTx } from "../lib/ms";
+  import { POOL_API } from "../lib/site";
 
   let { id }: { id: string } = $props();
 
   const l = loader(async (signal) => {
     try {
-      const t = (await get(`/transactions/${id}`, "interactive", signal)).data as Transaction;
+      const t = mapTx((await get(`/transactions/${id}`, "interactive", signal)).data);
       await attachHeights([t], signal);
       return { tx: t, pending: false };
     } catch (e) {
       if (!(e instanceof ApiError) || e.status !== 404) throw e;
       // not in a block yet: maybe in the pool
-      const t = (await get(`/transactions/unconfirmed/${id}`, "interactive", signal)).data as Transaction;
+      const t = mapTx((await get(`${POOL_API}/transactions/unconfirmed/${id}`, "interactive", signal)).data);
       return { tx: t, pending: true };
     }
   });
@@ -38,7 +39,8 @@
   const pending = $derived(l.state.data?.pending);
   const confirmations = $derived(t?.height && live.tip ? Math.max(1, live.tip.height - t.height + 1) : (t?.confirmations ?? 0));
   const payments = $derived((t?.asset?.payments ?? []) as { amount: string; recipientId: string }[]);
-  const knownAssets = new Set(["payments", "votes"]);
+  const knownAssets = new Set(["payments", "votes", "username", "token"]);
+  const gwei = (wei: string) => (Number(BigInt(wei || "0")) / 1e9).toLocaleString("en-US", { maximumFractionDigits: 3 });
   const otherAsset = $derived(t?.asset ? Object.fromEntries(Object.entries(t.asset).filter(([k]) => !knownAssets.has(k))) : {});
 </script>
 
@@ -50,6 +52,7 @@
     </div>
     {#if t}
       {#if pending}<span class="pill warn"><span class="dot pulse"></span>Pending</span>
+      {:else if t.failed}<span class="pill red" title="The call reverted: nothing moved, but the fee was paid">Failed · {formatInt(confirmations)} confirmations</span>
       {:else}<span class="pill green">{formatInt(confirmations)} confirmations</span>{/if}
     {/if}
   </div>
@@ -82,6 +85,22 @@
           <div class="k">To</div>
           <div><Addr address={t.recipient} full /></div>
         {/if}
+        {#if t.deployedContract}
+          <div class="k">Contract created</div>
+          <div><Addr address={t.deployedContract} full /></div>
+        {/if}
+        {#if t.asset?.username}
+          <div class="k">Username</div>
+          <div>{t.asset.username}</div>
+        {/if}
+        {#if t.asset?.token}
+          <div class="k">{t.asset.token.spender ? "Spender" : "Token recipient"}</div>
+          <div><Addr address={t.asset.token.spender ?? t.asset.token.to} full /> <span class="faint">({t.asset.token.value} token base units)</span></div>
+        {/if}
+        {#if !pending}
+          <div class="k">Status</div>
+          <div>{#if t.failed}<span class="red">Failed</span>{#if t.error} <span class="faint">({t.error})</span>{/if}{:else}<span class="green">Success</span>{/if}</div>
+        {/if}
         {#if t.typeGroup === 1 && t.type === 3}
           <div class="k">Votes</div>
           <div>
@@ -89,7 +108,7 @@
               {@const d = delegateByPk(v.publicKey)}
               <span class="pill" class:green={v.sign === "+"} class:red={v.sign === "-"} style="margin-right:6px">
                 {v.sign === "+" ? "Vote" : "Unvote"}
-                {#if d}<a href="#/wallet/{d.address}">{d.username}</a>{:else}<span class="mono">{v.publicKey}</span>{/if}
+                {#if d}<a href="#/wallet/{d.address}">{d.username}</a>{:else if v.publicKey}<a class="mono" href="#/wallet/{v.publicKey}">{v.publicKey}</a>{/if}
               </span>
             {/each}
           </div>
@@ -99,7 +118,9 @@
           <div><Amount value={t.amount} /></div>
         {/if}
         <div class="k">Fee</div>
-        <div><Amount value={t.fee} /></div>
+        <div><Amount value={t.fee} decimals={18} /></div>
+        <div class="k">Gas</div>
+        <div>{formatInt(t.gasUsed)} used of {formatInt(Number(t.gas))} <span class="faint">· price {gwei(t.gasPrice)} gwei</span></div>
         {#if t.vendorField}
           <div class="k">Memo</div>
           <div class="break">{t.vendorField}</div>
@@ -110,9 +131,13 @@
         <div class="mono break faint">{t.senderPublicKey}</div>
         <div class="k">Signature</div>
         <div class="mono break faint">{t.signature}</div>
-        {#if t.secondSignature}
+        {#if t.legacySecondSignature}
           <div class="k">Second signature</div>
-          <div class="mono break faint">{t.secondSignature}</div>
+          <div class="mono break faint">{t.legacySecondSignature} <span class="faint">(legacy, from ARK Core)</span></div>
+        {/if}
+        {#if t.data && !t.vendorField}
+          <div class="k">Data</div>
+          <div class="mono break faint data">0x{t.data}</div>
         {/if}
         {#if t.signatures?.length}
           <div class="k">Signatures</div>
@@ -146,6 +171,10 @@
 </div>
 
 <style>
+  .data {
+    max-height: 12em;
+    overflow: auto;
+  }
   pre {
     margin: 0;
     white-space: pre-wrap;

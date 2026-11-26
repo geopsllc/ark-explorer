@@ -1,12 +1,12 @@
 /**
  * Near-live chain state: the tip, recent blocks/transactions and the current round.
  *
- * Polling is slot-aware instead of fixed-interval. Measured on api.ark.io, a new block becomes
- * visible 0.8-1.8 s after its slot starts, so the poller sleeps until the next slot + 0.7 s and
- * then checks at +1.2, +1.7, +2.3, +3, +4, +5.5, +7 s until the block shows up. Normally that is
- * 2-3 requests per 8 s block (~20/min) and a block is on screen ~1-2 s after it is forged.
- * Each poll is a single height-range query (/blocks?height.from=<tip+1>, ~0.2 s) that returns the
- * new blocks themselves, so there is no "check tip, then fetch block" round trip.
+ * Polling follows the chain's rhythm instead of a fixed interval. Mainsail commits a block about
+ * every 8 s; when a proposer misses, the next consensus round takes longer (a block from round 1
+ * shows up ~18 s after the previous one, round 2 ~32 s, see chain.ts). So the poller checks
+ * shortly after the block is due (+0.7, +1.2, +1.7, +2.3, +3, +4, +5.5, +7 s), then every 2 s,
+ * slower once the chain looks stalled. Each poll is a single block-range query
+ * (/blocks?number.from=<tip+1>) that returns the new blocks themselves.
  *
  * Only one visible tab per browser polls (leader election over localStorage); it shares what it
  * gets with the other tabs over BroadcastChannel, so extra tabs cost no requests. Hidden tabs
@@ -14,29 +14,20 @@
  */
 import { ApiError, get, RateLimitError } from "./api";
 import { STORE } from "./site";
-import { chain, roundOf, roundOrder, roundStart, slotAt, slotOf, slotStartMs } from "./chain";
+import { chain, initChain, roundArrivalMs, roundOf, roundOrder, roundStart } from "./chain";
+import { mapBlock, mapTx } from "./ms";
+import { addBlock, buildRound, type RoundBlock, type RoundInfo } from "./roundview";
 import { load, remove, save } from "./storage";
 import { inBlock } from "./txinfo";
 import type { Block, Transaction } from "./types";
 
 export type LiveStatus = "connecting" | "live" | "delayed" | "offline" | "rate-limited";
-
-export interface RoundInfo {
-  number: number;
-  startHeight: number;
-  /** first slot of the round = slot of the previous round's last block + 1 */
-  firstSlot: number;
-  /** order[i] forges slots where slot % activeDelegates === i */
-  order: string[];
-  /** blocks of this round by slot */
-  forged: Record<number, { height: number; id: string; publicKey: string }>;
-  count: number;
-}
+export type { RoundInfo };
 
 const KEEP_BLOCKS = 100;
 const KEEP_TXS = 100;
+/** after the block is due (tip + 8 s) */
 const POLL_OFFSETS = [700, 1200, 1700, 2300, 3000, 4000, 5500, 7000];
-const STALLED_OFFSETS = [1000, 3000, 6000];
 
 export const live = $state({
   tip: null as Block | null,
@@ -66,7 +57,8 @@ export function onNewBlocks(fn: Listener): () => void {
 export const nowMs = () => Date.now() + live.clockOffset;
 
 // ---------- clock correction ----------
-// Blocks normally show up 0.8-1.8 s after their slot starts. If the arrival delay is far outside
+// Blocks are expected to show up ~0.8-1.8 s after their timestamp (measured on ARK Core; to be
+// confirmed on Mainsail once the testnet runs again). If the arrival delay is far outside
 // that range the local clock is wrong; correct it so countdowns and "forging now" stay right.
 // Only tight samples count: the block must have been missing from a poll made shortly before the
 // one that found it. A block that was simply fetched late (slow network, a busy or throttled tab)
@@ -93,7 +85,7 @@ async function fetchBlockTxs(b: Block, priority: "live" | "interactive"): Promis
   const out: Transaction[] = [];
   for (let page = 1; out.length < b.transactions && page <= 3; page++) {
     const body = await get(`/blocks/${b.id}/transactions?page=${page}&limit=100`, priority);
-    out.push(...(body.data as Transaction[]));
+    out.push(...(body.data as any[]).map(mapTx));
     if ((body.data as any[]).length < 100) break;
   }
   return inBlock(out, b);
@@ -124,10 +116,7 @@ function applyBlocks(blocks: Block[], txs: Transaction[], notify = true) {
   // round bookkeeping
   for (const b of newer) {
     const r = live.round;
-    if (r && roundOf(b.height) === r.number) {
-      r.forged[slotOf(b.timestamp.epoch)] = { height: b.height, id: b.id, publicKey: b.generator.publicKey };
-      r.count++;
-    }
+    if (r && roundOf(b.height) === r.number && b.height === r.startHeight + r.count) addBlock(r, toRoundBlock(b));
   }
   syncRound().catch(() => {});
   // the initial/catch-up window is state, not news: pages would otherwise all reload at start
@@ -141,35 +130,31 @@ function applyBlocks(blocks: Block[], txs: Transaction[], notify = true) {
   }
 }
 
+const toRoundBlock = (b: Block): RoundBlock => ({ height: b.height, id: b.id, proposer: b.generator.address, round: b.round });
+
 /** Make `live.round` describe the round of the next block. */
 let roundLoading: Promise<void> | null = null;
 async function syncRound(): Promise<void> {
   const tip = live.tip;
   if (!tip) return;
   const next = roundOf(tip.height + 1);
-  if (live.round?.number === next) return;
+  if (live.round?.number === next && live.round.startHeight + live.round.count === tip.height + 1) return;
   if (roundLoading) return roundLoading;
   roundLoading = (async () => {
     try {
       const start = roundStart(next);
-      const order = await roundOrder(next, "interactive");
-      // blocks from the previous round's last block up to the tip (at most 52)
-      let blocks = live.blocks.filter((b) => b.height >= start - 1);
-      if (!blocks.some((b) => b.height === start - 1) && start > 1) {
-        const body = await get(`/blocks?height.from=${start - 1}&height.to=${tip.height}&orderBy=height:asc&limit=100`, "interactive");
-        blocks = body.data as Block[];
+      const list = await roundOrder(next, "interactive");
+      // the round's blocks up to the tip (at most 52)
+      let blocks = live.blocks.filter((b) => b.height >= start);
+      const tipNow = live.tip?.height ?? tip.height;
+      if (blocks.length < tipNow - start + 1) {
+        const body = await get(`/blocks?number.from=${start}&number.to=${tipNow}&orderBy=number:asc&limit=100`, "interactive");
+        blocks = (body.data as any[]).map(mapBlock);
       }
-      const prev = blocks.find((b) => b.height === start - 1);
-      const firstSlot = prev ? slotOf(prev.timestamp.epoch) + 1 : slotOf(tip.timestamp.epoch) + 1;
-      const forged: RoundInfo["forged"] = {};
-      let count = 0;
-      for (const b of blocks) {
-        if (b.height >= start) {
-          forged[slotOf(b.timestamp.epoch)] = { height: b.height, id: b.id, publicKey: b.generator.publicKey };
-          count++;
-        }
-      }
-      if (roundOf((live.tip?.height ?? tip.height) + 1) === next) live.round = { number: next, startHeight: start, firstSlot, order, forged, count };
+      const r = buildRound(next, start, list, blocks.map(toRoundBlock));
+      // blocks that arrived meanwhile
+      for (const b of [...live.blocks].reverse()) if (b.height === r.startHeight + r.count && roundOf(b.height) === next) addBlock(r, toRoundBlock(b));
+      if (roundOf((live.tip?.height ?? tip.height) + 1) === next) live.round = r;
     } finally {
       roundLoading = null;
     }
@@ -179,13 +164,14 @@ async function syncRound(): Promise<void> {
 
 // ---------- initial load / resync ----------
 async function resync(priority: "interactive" | "live" = "interactive") {
+  await initChain(priority);
   const body = await get("/blockchain", priority);
-  const h: number = body.data.block.height;
+  const h: number = Number(body.data.block.number);
   if (body.data.supply) {
     live.supply = BigInt(body.data.supply);
     live.supplyHeight = h;
   }
-  const blocks = (await get(`/blocks?height.from=${Math.max(1, h - KEEP_BLOCKS + 1)}&height.to=${h}&orderBy=height:asc&limit=100`, priority)).data as Block[];
+  const blocks = ((await get(`/blocks?number.from=${Math.max(1, h - KEEP_BLOCKS + 1)}&number.to=${h}&orderBy=number:asc&limit=100`, priority)).data as any[]).map(mapBlock);
   live.tip = null;
   live.blocks = [];
   live.round = null;
@@ -225,19 +211,23 @@ function electLeader() {
 let lastPoll = 0;
 let failures = 0;
 
+/** When the poller checks for the block after `tipMs`: first tightly around when it is due, then
+ * every 2 s (later consensus rounds), every 5 s after 2 minutes and every 15 s after 10 (stalled). */
+function pollTimes(tipMs: number): (now: number) => number {
+  return (now) => {
+    const due = tipMs + chain.blocktime * 1000;
+    for (const o of POLL_OFFSETS) if (due + o >= now) return due + o;
+    const e = now - tipMs;
+    const step = e < 120_000 ? 2000 : e < 600_000 ? 5000 : 15_000;
+    return tipMs + Math.ceil(e / step) * step;
+  };
+}
+
 function nextPollAt(now: number): number {
-  const tip = live.tip!;
-  const tipSlot = slotOf(tip.timestamp.epoch);
-  let target = Math.max(tipSlot + 1, slotAt(now));
-  for (;;) {
-    const base = slotStartMs(target);
-    const offsets = target - tipSlot > 3 ? STALLED_OFFSETS : POLL_OFFSETS;
-    for (const o of offsets) {
-      const t = base + o;
-      if (t >= now && t > lastPoll + 400) return t;
-    }
-    target++;
-  }
+  const at = pollTimes(live.tip!.timestamp.unix * 1000);
+  let t = at(now);
+  while (t <= lastPoll + 400) t = at(t + 1);
+  return t;
 }
 
 async function poll(leader = true) {
@@ -245,8 +235,8 @@ async function poll(leader = true) {
   const from = tip.height + 1;
   const sent = Date.now();
   if (leader) lastPoll = nowMs();
-  const body = await get(`/blocks?height.from=${from}&orderBy=height:asc&limit=100`, "live");
-  const blocks = body.data as Block[];
+  const body = await get(`/blocks?number.from=${from}&orderBy=number:asc&limit=100`, "live");
+  const blocks = (body.data as any[]).map(mapBlock);
   failures = 0;
   if (!blocks.length) {
     lastEmpty = { height: from, at: sent };
@@ -272,7 +262,7 @@ async function loop() {
       continue;
     }
     // back after a long sleep (hidden tab, laptop lid): reload the recent window
-    if (slotAt(nowMs()) - slotOf(live.tip.timestamp.epoch) > KEEP_BLOCKS) {
+    if (live.lastSuccess && Date.now() - live.lastSuccess > KEEP_BLOCKS * chain.blocktime * 1000) {
       try {
         await resync("live");
       } catch {
@@ -339,7 +329,7 @@ export async function startLive() {
 
   // followers stay fresh even if the leader's messages are missed
   setInterval(() => {
-    if (!live.leader && !document.hidden && live.tip && slotAt(nowMs()) - slotOf(live.tip.timestamp.epoch) > 4) {
+    if (!live.leader && !document.hidden && live.tip && nowMs() - live.tip.timestamp.unix * 1000 > 4 * chain.blocktime * 1000) {
       poll(false).catch(() => {});
     }
   }, 8000);
@@ -357,6 +347,30 @@ export async function startLive() {
   loop();
 }
 
-/** Expected start time (ms, corrected clock) of `slot`. */
-export const slotTime = (slot: number) => slotStartMs(slot);
+// ---------- proposal turns (Forging View) ----------
+
+/** Consensus round the next block number is most likely in now, from the time since the tip. */
+function roundInProgress(now: number): number {
+  if (!live.tip) return 0;
+  const e = now - live.tip.timestamp.unix * 1000;
+  let r = 0;
+  // a round counts as over a little after its block would have shown up
+  while (r < 1000 && roundArrivalMs(r) + 2000 < e) r++;
+  return r;
+}
+
+/** The turn being proposed now (see roundview.ts), and when later turns are expected. */
+export function currentSlot(now: number): number {
+  return (live.round?.nextSlot ?? 0) + roundInProgress(now);
+}
+
+/** Expected time (ms, corrected clock) turn `slot` starts, assuming every turn before it succeeds. */
+export function slotStartMs(slot: number, now: number): number {
+  const tipMs = (live.tip?.timestamp.unix ?? 0) * 1000;
+  const r = roundInProgress(now);
+  const cur = (live.round?.nextSlot ?? 0) + r;
+  if (slot <= cur) return tipMs + (r ? roundArrivalMs(r - 1) : 0);
+  return tipMs + roundArrivalMs(r) + (slot - cur - 1) * chain.blocktime * 1000;
+}
+
 export { chain };

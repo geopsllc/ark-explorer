@@ -1,6 +1,7 @@
+import { MS_GROUP, MS_TYPE, sameAddress } from "./ms";
 import type { Block, Transaction } from "./types";
 
-/** Human name of a transaction type (Core v3 type groups 1 and 2). */
+/** Human name of a transaction type (Core-style types the Mainsail adapter decodes calls into, see ms.ts). */
 export function txTypeName(t: Pick<Transaction, "type" | "typeGroup" | "asset">): string {
   if (t.typeGroup === 1) {
     switch (t.type) {
@@ -9,7 +10,7 @@ export function txTypeName(t: Pick<Transaction, "type" | "typeGroup" | "asset">)
       case 2: return "Validator registration";
       case 3: {
         const v: string[] = t.asset?.votes ?? [];
-        return v.length === 2 ? "Vote switch" : v[0]?.startsWith("-") ? "Unvote" : "Vote";
+        return v[0]?.startsWith("-") ? "Unvote" : "Vote";
       }
       case 4: return "Multisignature";
       case 5: return "IPFS";
@@ -18,6 +19,17 @@ export function txTypeName(t: Pick<Transaction, "type" | "typeGroup" | "asset">)
       case 8: return "HTLC lock";
       case 9: return "HTLC claim";
       case 10: return "HTLC refund";
+    }
+  }
+  if (t.typeGroup === MS_GROUP) {
+    switch (t.type) {
+      case MS_TYPE.validatorUpdate: return "Validator update";
+      case MS_TYPE.usernameRegistration: return "Username registration";
+      case MS_TYPE.usernameResignation: return "Username resignation";
+      case MS_TYPE.contractDeployment: return "Contract deployment";
+      case MS_TYPE.tokenTransfer: return "Token transfer";
+      case MS_TYPE.tokenApproval: return "Token approval";
+      default: return "Contract call";
     }
   }
   if (t.typeGroup === 2) {
@@ -36,29 +48,30 @@ export function txAmount(t: Transaction): bigint {
 
 /** Signed amount from the point of view of `me` (wallet pages). */
 export function txAmountFor(t: Transaction, me: string): bigint {
-  const out = t.sender === me;
+  const out = sameAddress(t.sender, me);
   if (t.typeGroup === 1 && t.type === 6) {
     const payments = (t.asset?.payments ?? []) as { amount: string; recipientId: string }[];
-    const mine = payments.filter((p) => p.recipientId === me).reduce((s, p) => s + BigInt(p.amount), 0n);
+    const mine = payments.filter((p) => sameAddress(p.recipientId, me)).reduce((s, p) => s + BigInt(p.amount), 0n);
     if (!out) return mine;
     const sum = payments.reduce((s, p) => s + BigInt(p.amount), 0n);
     return -(sum - mine);
   }
   const amt = BigInt(t.amount ?? "0");
-  if (out && t.recipient === me) return 0n;
+  if (out && sameAddress(t.recipient, me)) return 0n;
   if (out) return -amt;
-  return t.recipient === me ? amt : 0n;
+  return sameAddress(t.recipient, me) ? amt : 0n;
 }
 
-/** Vote targets (public keys) with their sign. */
+/** Vote targets (validator addresses; "" for an unvote, which names nobody) with their sign. */
 export function txVotes(t: Transaction): { sign: "+" | "-"; publicKey: string }[] {
   return ((t.asset?.votes ?? []) as string[]).map((v) => ({ sign: v[0] as "+" | "-", publicKey: v.slice(1) }));
 }
 
 /** True when the transaction touches `address`. */
 export function involves(t: Transaction, address: string): boolean {
-  if (t.sender === address || t.recipient === address) return true;
-  return ((t.asset?.payments ?? []) as { recipientId: string }[]).some((p) => p.recipientId === address);
+  if (sameAddress(t.sender, address) || sameAddress(t.recipient, address) || sameAddress(t.deployedContract, address)) return true;
+  if (sameAddress(t.asset?.token?.to, address)) return true;
+  return ((t.asset?.payments ?? []) as { recipientId: string }[]).some((p) => sameAddress(p.recipientId, address));
 }
 
 /**

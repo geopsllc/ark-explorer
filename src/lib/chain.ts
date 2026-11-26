@@ -1,81 +1,112 @@
 /**
- * Slot, round and forging-order math, matching ARK Core 3.13 exactly:
+ * Round and proposer math for Mainsail (ARK's BFT chain), matching the node
+ * (ArkEcosystem/mainsail: blockchain-utils round-calculator + proposer-calculator, validator-set):
  *
- * - slot = floor(epochSeconds / blocktime); the slot's forger is order[slot % activeDelegates]
- *   (core-kernel calculate-forging-info; mainnet never changed activeDelegates or blocktime).
- * - round(height) = floor((height - 1) / activeDelegates) + 1 (core-kernel round-calculator).
- * - order = the round's delegates sorted by vote balance desc (public key asc on ties), shuffled
- *   with a seed of sha256(round number as a string), re-hashed after every 4 swaps. Note the
- *   outer loop's own i++, which skips one index per group (core-state round-state shuffleDelegates).
- *
- * Verified against mainnet: 51/51 blocks of a full round matched.
+ * - A round is `roundValidators` (53) BLOCKS. Round 1 starts at the block after genesis, so
+ *   round(height) = floor((height - genesis - 1) / 53) + 1. The testnet's genesis is the ARK
+ *   devnet snapshot it started from, so it is read from the API once (the first block).
+ * - Each block number is decided by consensus rounds 0, 1, 2…; the proposer of consensus round r
+ *   is roundValidators[(totalRound + r) % 53], where totalRound grows by (commit round + 1) with
+ *   every block. A block's `round` is the consensus round it was proposed in, so `round` > 0
+ *   means the proposers of rounds 0…round-1 missed (the node's own ProposerReporter counts misses
+ *   the same way).
+ * - The API stores each round's validators in proposal order (`/rounds/{n}`). Some stored rounds
+ *   start at another point of the rotation, so the order is calibrated from real proposers
+ *   (roundview.ts) instead of trusted as is.
  */
 import type { Priority } from "./api";
 import { get } from "./api";
-import { sha256 } from "./sha256";
 import { load, save } from "./storage";
 import { STORE } from "./site";
 
-/** ARK mainnet constants (never changed since genesis: 51 delegates, 8 s blocks). */
+/** Mainsail testnet constants (/node/configuration: blockTime 8000, roundValidators 53). */
 export const chain = {
-  epochMs: Date.UTC(2017, 2, 21, 13, 0, 0),
   blocktime: 8,
-  activeDelegates: 51,
-} as const;
+  activeDelegates: 53,
+  /** height of the genesis block (set by initChain) */
+  genesis: 0,
+} as const as { blocktime: number; activeDelegates: number; genesis: number };
 
-export const slotOf = (epochSeconds: number) => Math.floor(epochSeconds / chain.blocktime);
-export const slotStartMs = (slot: number) => chain.epochMs + slot * chain.blocktime * 1000;
-export const slotAt = (ms: number) => Math.floor((ms - chain.epochMs) / 1000 / chain.blocktime);
-export const roundOf = (height: number) => Math.floor((height - 1) / chain.activeDelegates) + 1;
-export const roundStart = (round: number) => (round - 1) * chain.activeDelegates + 1;
+export const roundOf = (height: number) => Math.floor((height - chain.genesis - 1) / chain.activeDelegates) + 1;
+export const roundStart = (round: number) => chain.genesis + 1 + (round - 1) * chain.activeDelegates;
 
-function shuffle(publicKeys: string[], round: number): string[] {
-  const d = [...publicKeys];
-  let seed = sha256(new TextEncoder().encode(String(round)));
-  for (let i = 0, n = d.length; i < n; i++) {
-    for (let x = 0; x < 4 && i < n; i++, x++) {
-      const k = seed[x] % n;
-      const b = d[k];
-      d[k] = d[i];
-      d[i] = b;
-    }
-    seed = sha256(seed);
+/**
+ * When a block proposed in consensus round r shows up, measured from the previous block's
+ * timestamp (testnet, Nov 2026: round 0 ~8 s, 1 ~18 s, 2 ~32 s, 3 ~50 s, 4 ~70 s; the node waits
+ * blockTime, then each round's propose / prevote / precommit timeouts grow by 2 s).
+ */
+export const roundArrivalMs = (r: number) => 8000 + 10_000 * r + 2000 * r * Math.max(0, r - 1);
+
+let initing: Promise<void> | null = null;
+/** Read the genesis height (cached: it never changes). */
+export function initChain(priority: Priority = "interactive"): Promise<void> {
+  if (chain.genesis) return Promise.resolve();
+  const key = `${STORE}:genesis`;
+  const cached = load<number>(key);
+  if (cached) {
+    chain.genesis = cached;
+    return Promise.resolve();
   }
-  return d;
+  initing ??= get("/blocks?limit=1&orderBy=number:asc", priority)
+    .then((body) => {
+      const h = Number(body.data?.[0]?.number);
+      if (!h) throw new Error("Could not read the first block");
+      chain.genesis = h;
+      save(key, h);
+    })
+    .finally(() => (initing = null));
+  return initing;
 }
 
 const orderCache = new Map<number, Promise<string[]>>();
+const storeKey = `${STORE}:rounds`;
+const KEEP_ROUNDS = 250;
+
+function remember(rounds: [number, string[]][]) {
+  const all = load<Record<string, string[]>>(storeKey) ?? {};
+  for (const [round, list] of rounds) {
+    if (!orderCache.has(round)) orderCache.set(round, Promise.resolve(list));
+    all[round] = list;
+  }
+  const keys = Object.keys(all).map(Number).sort((a, b) => b - a);
+  for (const k of keys.slice(KEEP_ROUNDS)) delete all[k];
+  save(storeKey, all);
+}
 
 /**
- * Forging order of `round`: index i forges the slots where slot % activeDelegates === i.
- * Immutable once the round exists, so it is cached (memory + localStorage for the last 120 rounds).
+ * Validators of `round` in the API's proposal order (addresses). Immutable once the round exists,
+ * so cached (memory + localStorage for the last 250 rounds). `latest` (the newest round there is)
+ * lets a miss fetch the whole /rounds page around it: 100 rounds per request instead of one.
  */
-export function roundOrder(round: number, priority: Priority = "interactive"): Promise<string[]> {
+export function roundOrder(round: number, priority: Priority = "interactive", latest = 0): Promise<string[]> {
   const hit = orderCache.get(round);
   if (hit) return hit;
-  const storeKey = `${STORE}:orders`;
-  const stored = load<Record<string, string[]>>(storeKey) ?? {};
-  if (stored[round]) {
-    const p = Promise.resolve(stored[round]);
+  const stored = load<Record<string, string[]>>(storeKey)?.[round];
+  if (stored) {
+    const p = Promise.resolve(stored);
     orderCache.set(round, p);
     return p;
   }
-  const p = get(`/rounds/${round}/delegates`, priority).then((body) => {
-    const list = (body.data as { publicKey: string; votes: string }[]).slice();
-    if (list.length !== chain.activeDelegates) throw new Error(`Round ${round} is not available yet`);
-    list.sort((a, b) => {
-      const v = BigInt(b.votes) - BigInt(a.votes);
-      if (v !== 0n) return v > 0n ? 1 : -1;
-      return a.publicKey < b.publicKey ? -1 : a.publicKey > b.publicKey ? 1 : 0;
+  const one = () =>
+    get(`/rounds/${round}`, priority).then((body) => {
+      const list = (body.data?.validators ?? []) as string[];
+      if (list.length !== chain.activeDelegates) throw new Error(`Round ${round} is not available yet`);
+      return list;
     });
-    const order = shuffle(list.map((x) => x.publicKey), round);
-    const all = load<Record<string, string[]>>(storeKey) ?? {};
-    all[round] = order;
-    const keys = Object.keys(all).map(Number).sort((a, b) => b - a);
-    for (const k of keys.slice(120)) delete all[k];
-    save(storeKey, all);
-    return order;
-  });
+  const p = (async () => {
+    if (latest > round + 1) {
+      // newest first, 100 per page
+      const page = Math.floor((latest - round) / 100) + 1;
+      const body = await get(`/rounds?limit=100&page=${page}`, priority);
+      const rows = (body.data ?? []) as { round: string; validators: string[] }[];
+      remember(rows.filter((r) => r.validators?.length === chain.activeDelegates).map((r) => [Number(r.round), r.validators]));
+      const found = rows.find((r) => Number(r.round) === round);
+      if (found) return found.validators;
+    }
+    const list = await one();
+    remember([[round, list]]);
+    return list;
+  })();
   p.catch(() => orderCache.delete(round));
   orderCache.set(round, p);
   return p;

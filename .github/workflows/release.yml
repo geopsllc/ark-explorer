@@ -1,17 +1,20 @@
 # Builds the explorer and attaches the ready-to-serve site to a GitHub release, so it can be
 # hosted without Node.js: download, unpack into a folder your webserver serves, done.
 #
-# Trigger: push a tag like v0.2.0 (it should match "version" in package.json),
+# Mainsail testnet branch: tags are mainsail-v<version> (e.g. mainsail-v0.1.0), so they never clash
+# with the ark-mainnet releases (v*), and these releases are never marked "latest": the
+# releases/latest download links keep pointing at the mainnet build.
+# Trigger: push a tag like mainsail-v0.1.0 (it should match "version" in package.json),
 # or run it from the Actions tab with a tag name to (re)build that release.
 name: Release
 
 on:
   push:
-    tags: ["v*"]
+    tags: ["mainsail-v*"]
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag, e.g. v0.2.0 (created on the selected branch if it doesn't exist)"
+        description: "Release tag, e.g. mainsail-v0.1.0 (created on the selected branch if it doesn't exist)"
         required: true
 
 permissions:
@@ -38,7 +41,7 @@ jobs:
 
       - name: Package dist/
         run: |
-          name="ark-explorer"  # fixed name so releases/latest/download/ark-explorer.zip always works
+          name="ark-explorer-mainsail"  # fixed name: releases/download/<tag>/ark-explorer-mainsail.zip
           mkdir -p out
           # files sit at the archive root: unpack straight into the served folder
           (cd dist && zip -qr "../out/${name}.zip" .)
@@ -51,6 +54,6 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" out/* --clobber
           else
-            gh release create "$TAG" out/* --target "$GITHUB_SHA" --title "ARK Explorer $TAG" --notes \
-          "Prebuilt site for ARK mainnet. Unpack the zip or tar.gz into any folder your webserver serves; no Node.js, rewrite rules or configuration needed. See the README for hosting tips."
+            gh release create "$TAG" out/* --target "$GITHUB_SHA" --latest=false --title "ARK Mainsail Explorer ${TAG#mainsail-}" --notes \
+          "Prebuilt site for the ARK Mainsail testnet (branch mainsail). Unpack the zip or tar.gz into any folder your webserver serves; no Node.js, rewrite rules or configuration needed. See the README on the mainsail branch for hosting tips."
           fi

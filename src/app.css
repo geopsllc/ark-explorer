@@ -175,6 +175,10 @@ select {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* the currency name (TARK) is longer than ARK's glyph: smaller in the big tile numbers */
+.stat .value .sym {
+  font-size: 0.6em;
+}
 .stat .sub {
   color: var(--muted);
   font-size: 12px;

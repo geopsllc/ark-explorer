@@ -1,26 +1,24 @@
 /**
- * Every API request goes through here. Timeouts, retries and pacing are tuned from load-testing
- * api.ark.io (November 2026, the same measurements ARK Wallet uses, plus browser-specific ones):
+ * Every API request goes through here. Timeouts, retries and pacing were tuned on api.ark.io
+ * (ARK Core) and kept for the Mainsail API, which runs the same kind of public API behind the
+ * same per-IP limit (x-ratelimit-limit: 200):
  *
- * - Rate limit: 200 requests per fixed 60 s window per IP. The 429 body says nothing
- *   useful and browsers cannot read Retry-After / X-RateLimit-* (not in Access-Control-Expose-
- *   Headers), so we never want to hit it: requests are counted in a sliding 60 s window and each
- *   priority stops at its own share of REQUEST_BUDGET (170, leaving headroom for
- *   other tabs and apps on the same IP). After a 429 the host is paused and probed every 10 s.
- * - Latency: /blockchain and height-range /blocks ~0.13-0.35 s; typical pages 0.2-1.3 s; heavy
- *   queries up to ~3.3 s. Overloaded queries return 500 after ~3.2 s (the server's own timeout).
- * - "Latest blocks" (/blocks?limit=N) takes ~2.7 s and often 500s; the same rows by height range
- *   take ~0.2 s, so block lists are always read by height range.
- * - Newest-first pages more than ~20k rows deep usually 500; oldest-first works at any depth in
- *   1-2.5 s, so deep pages are read oldest-first and reversed (see `pagedNewestFirst`).
+ * - Rate limit: 200 requests per 60 s window per IP. Browsers cannot read Retry-After /
+ *   X-RateLimit-* (not in Access-Control-Expose-Headers), so we never want to hit it: requests
+ *   are counted in a sliding 60 s window and each priority stops at its own share of
+ *   REQUEST_BUDGET (170, leaving headroom for other tabs and apps on the same IP). After a 429
+ *   the host is paused and probed every 10 s.
+ * - Block lists are always read by number range (/blocks?number.from=&number.to=): cheap and
+ *   exact, also for the live poller.
+ * - Deep newest-first pages are read oldest-first and reversed (see `pagedNewestFirst`).
  *
  * Priorities:
  * - interactive (what the user is looking at): 10 s timeout, 500 retried after 0.3 s and 1 s,
  *   network errors after 0.5 s and 1.5 s, 4xx never.
- * - live (block poller): 3 s timeout, no retries: the next poll is at most ~0.5 s away.
- * - background (directory, voter counts): 8 s timeout, no retries; paused when the budget runs low.
- * - bulk (the 24 h missed-block scan, ~108 requests): like background but with a smaller share, so a
- *   first visit's scan cannot hold up the voter counts and directory pages on screen.
+ * - live (block poller): 3 s timeout, no retries: the next poll is at most a few seconds away.
+ * - background (directory): 8 s timeout, no retries; paused when the budget runs low.
+ * - bulk (the 24 h missed-block scan, ~110 requests): like background but with a smaller share, so a
+ *   first visit's scan cannot hold up the directory pages on screen.
  */
 import { PRIMARY_API, REQUEST_BUDGET } from "./site";
 
@@ -114,7 +112,7 @@ async function once(path: string, priority: Priority, signal?: AbortSignal): Pro
   signal?.addEventListener("abort", onAbort);
   let res: Response;
   try {
-    res = await fetch(PRIMARY_API + path, { signal: ctrl.signal, cache: "no-store" });
+    res = await fetch(/^https?:/.test(path) ? path : PRIMARY_API + path, { signal: ctrl.signal, cache: "no-store" });
   } catch (e: any) {
     if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
     throw new ApiError(ctrl.signal.aborted ? "The API did not answer in time" : "Network error");
@@ -138,7 +136,7 @@ async function once(path: string, priority: Priority, signal?: AbortSignal): Pro
   return body;
 }
 
-/** GET `path` (relative to the API base, e.g. "/blocks/1") and return the parsed JSON body. */
+/** GET `path` (relative to the API base, e.g. "/blocks/1", or a full URL) and return the parsed JSON body. */
 export async function get(path: string, priority: Priority = "interactive", signal?: AbortSignal): Promise<any> {
   const plan = RETRY[priority];
   let server = 0;

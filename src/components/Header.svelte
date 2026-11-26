@@ -1,12 +1,12 @@
 <script lang="ts">
-  import { TITLE } from "../lib/site";
+  import { NETWORK, TITLE } from "../lib/site";
   import { live } from "../lib/live.svelte";
   import { route } from "../lib/router.svelte";
   import { formatInt } from "../lib/format";
   import { search } from "../lib/search";
   import { chain } from "../lib/chain";
   import { dir } from "../lib/delegates.svelte";
-  import { known } from "../lib/known.svelte";
+  import { known, knownLabel } from "../lib/known.svelte";
   import type { Delegate } from "../lib/types";
 
   let q = $state("");
@@ -25,7 +25,7 @@
   const MAX_SUGGESTIONS = 8;
   let open = $state(false);
   let sel = $state(-1);
-  /** One suggestion: a validator, or a known exchange / ARK team wallet. */
+  /** One suggestion: a validator, or one of the protocol's contracts. */
   interface Suggestion {
     name: string;
     address: string;
@@ -46,7 +46,7 @@
         cls: status(d),
         order: (d.isResigned ? 1e9 : 0) + (d.rank || 1e8),
       })),
-      ...known.list.map((k) => ({ name: k.name, address: k.address, meta: k.type === "team" ? "ARK team" : "exchange", cls: "known", order: 5e8 })),
+      ...known.list.map((k) => ({ name: k.name, address: k.address, meta: knownLabel(k), cls: "known", order: 5e8 })),
     ];
     const exact: Suggestion[] = [];
     const starts: Suggestion[] = [];
@@ -114,14 +114,16 @@
     offline: "Offline",
     "rate-limited": "Rate limited",
   };
-  const statusClass = $derived(live.status === "live" ? "green" : live.status === "connecting" ? "" : live.status === "offline" ? "red" : "warn");
+  /** the API answers but no block for over a minute: the chain itself has stopped */
+  const stalled = $derived(live.status === "live" && !!live.tip && live.now - live.tip.timestamp.unix * 1000 > 60_000);
+  const statusClass = $derived(stalled ? "warn" : live.status === "live" ? "green" : live.status === "connecting" ? "" : live.status === "offline" ? "red" : "warn");
 </script>
 
 <header>
   <div class="inner">
     <a class="brand" href="#/">
       <svg viewBox="0 0 64 64" width="26" height="26" aria-hidden="true"><rect width="64" height="64" rx="14" fill="#E5383B" /><path d="M32 13 50 51H43.5L32 27 20.5 51H14z" fill="#fff" /><path d="M24.5 42.5h15l-2.6-5.3h-9.8z" fill="#fff" /></svg>
-      <span>{TITLE}</span>
+      <span>{TITLE}</span><span class="net" title={NETWORK}>testnet</span>
     </a>
     <nav>
       {#each nav as n}
@@ -173,9 +175,9 @@
       {/if}
     </form>
     <div class="right-side">
-      <span class="pill {statusClass}" title={live.error || (live.leader ? "This tab polls the API" : "Another tab polls the API and shares updates")}>
-        <span class="dot" class:pulse={live.status === "live"}></span>
-        {statusText[live.status]}
+      <span class="pill {statusClass}" title={stalled ? "The API answers, but the chain has made no block for over a minute" : live.error || (live.leader ? "This tab polls the API" : "Another tab polls the API and shares updates")}>
+        <span class="dot" class:pulse={live.status === "live" && !stalled}></span>
+        {stalled ? "Stalled" : statusText[live.status]}
         {#if live.tip}<a class="height" href="#/block/{live.tip.height}">#{formatInt(live.tip.height)}</a>{/if}
       </span>
     </div>
@@ -199,6 +201,17 @@
     align-items: center;
     gap: 18px;
     flex-wrap: wrap;
+  }
+  .net {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--warn);
+    border: 1px solid currentColor;
+    border-radius: 4px;
+    padding: 1px 4px;
+    margin-left: -2px;
   }
   .brand {
     display: flex;

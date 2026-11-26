@@ -1,13 +1,13 @@
 import { get } from "./api";
 import { live } from "./live.svelte";
-import type { Block, Transaction } from "./types";
+import type { Transaction } from "./types";
 
 const known = new Map<string, number>(); // blockId -> height (immutable)
 
 /**
- * Fill in `height` for transactions. The API only gives blockId and a confirmations count that
- * depends on its own (unknown) tip, so heights are looked up exactly: blocks we already have are
- * free, the rest cost one request per page (`/blocks?id=a,b,c` answers 25 IDs in ~0.2 s).
+ * Fill in `height` for transactions. The API only gives the block hash and a confirmations count
+ * that depends on its own (unknown) tip, so heights are looked up exactly: blocks we already have
+ * are free, the rest cost one request per page (`/blocks?hash=a,b,c`).
  */
 export async function attachHeights(txs: Transaction[], signal?: AbortSignal) {
   for (const b of live.blocks) known.set(b.id, b.height);
@@ -16,8 +16,8 @@ export async function attachHeights(txs: Transaction[], signal?: AbortSignal) {
     try {
       for (let i = 0; i < missing.length; i += 50) {
         const ids = missing.slice(i, i + 50);
-        const body = await get(`/blocks?id=${ids.join(",")}&limit=100`, "interactive", signal);
-        for (const b of body.data as Block[]) known.set(b.id, b.height);
+        const body = await get(`/blocks?hash=${ids.join(",")}&limit=100`, "interactive", signal);
+        for (const b of body.data as any[]) known.set(b.hash, Number(b.number));
       }
     } catch (e: any) {
       if (e?.name === "AbortError") throw e;

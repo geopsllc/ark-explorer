@@ -40,9 +40,9 @@
             <span class="trunc" style="--trunc:230px">{txTypeName(t)}
             {#if t.typeGroup === 1 && t.type === 3}
               {#each txVotes(t) as v}
-                <span class="vote" class:red={v.sign === "-"} class:green={v.sign === "+"}>{v.sign}{delegateByPk(v.publicKey)?.username ?? shortAddress(v.publicKey, 4)}</span>
+                {#if v.publicKey}<span class="vote" class:red={v.sign === "-"} class:green={v.sign === "+"}>{v.sign}{delegateByPk(v.publicKey)?.username ?? shortAddress(v.publicKey, 4)}</span>{/if}
               {/each}
-            {/if}</span>
+            {/if}{#if t.failed}<span class="vote red" title={t.error ? `Reverted: ${t.error}` : "Reverted (the fee was still paid)"}>failed</span>{/if}</span>
           </td>
           <td class="t-from"><span class="trunc" style="--trunc:150px"><Addr address={t.sender} self={me} /></span></td>
           <td class="t-to"><span class="trunc" style="--trunc:150px">

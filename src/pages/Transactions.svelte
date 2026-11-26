@@ -8,6 +8,7 @@
   import { loader } from "../lib/loader.svelte";
   import { route, setQuery } from "../lib/router.svelte";
   import { formatInt } from "../lib/format";
+  import { mapTx } from "../lib/ms";
   import type { Transaction } from "../lib/types";
 
   const SIZE = 25;
@@ -15,9 +16,9 @@
   let total = $state(0);
 
   const l = loader(async (signal) => {
-    const r = await pagedNewestFirst<Transaction>("/transactions", page, SIZE, total, signal);
+    const r = await pagedNewestFirst<any>("/transactions", page, SIZE, total, signal);
     total = r.totalCount;
-    return attachHeights(r.data, signal);
+    return attachHeights(r.data.map(mapTx), signal);
   });
   onDestroy(() => l.destroy());
   $effect(() => {

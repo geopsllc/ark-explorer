@@ -1,29 +1,25 @@
 # Builds the explorer and publishes it to Cloudflare Pages, with a custom domain.
-# Branch per network: ark-mainnet is the production branch (other networks would get their own branch).
+# Branch per network: this is the `mainsail` branch (ARK Mainsail testnet), deployed to its own
+# Pages project and domain, separate from ark-mainnet's.
 #
-# Repository secrets (Settings → Secrets and variables → Actions → Secrets):
+# Repository secrets (Settings → Secrets and variables → Actions → Secrets), the same ones
+# ark-mainnet uses:
 #   CLOUDFLARE_API_TOKEN   token with  Account › Cloudflare Pages › Edit
-#                          and         Zone › DNS › Edit  (for the zone of CUSTOM_DOMAIN)
+#                          and         Zone › DNS › Edit  (for the zone of the custom domain)
 #   CLOUDFLARE_ACCOUNT_ID  your Cloudflare account ID
-# Repository variables (optional, Settings → Secrets and variables → Actions → Variables):
-#   PAGES_PROJECT          Cloudflare Pages project name (default: ark-explorer)
-#   CUSTOM_DOMAIN          domain to serve the explorer on (default: ark.geops.net; set to "none" to skip)
+# Repository variables (optional; named MAINSAIL_* so they never mix with ark-mainnet's):
+#   MAINSAIL_PAGES_PROJECT   Cloudflare Pages project name (default: ark-explorer-mainsail)
+#   MAINSAIL_CUSTOM_DOMAIN   domain to serve the explorer on (default: mainsail.geops.net; "none" to skip)
 #
 # Without the secrets (e.g. in a fork) the build still runs and the deploy steps are skipped.
-#
-# Reward-sharing data (hidden #/shares page): every 6 hours a Cloudflare Worker cron
-# (tools/dispatch-worker) starts this workflow by workflow_dispatch, which crawls api.ark.io with
-# tools/ark-share/analyzer.py (~760 requests, ~5 min) and deploys the result as /shares.json.
-# Pushes and pull requests reuse the live /shares.json instead of crawling, unless a push
-# changes tools/ark-share or this workflow. If a crawl fails or looks wrong (fewer than 5 sharing delegates),
-# the live file is kept. Nothing is committed.
-name: Deploy
+name: Deploy (Mainsail testnet)
 
 on:
   push:
-    branches: [ark-mainnet]
+    branches: [mainsail]
   pull_request:
-  workflow_dispatch:   # every 6 hours from tools/dispatch-worker; GitHub's schedule rarely fired
+    branches: [mainsail]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -33,44 +29,19 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  PAGES_PROJECT: ${{ vars.PAGES_PROJECT || 'ark-explorer' }}
-  CUSTOM_DOMAIN: ${{ vars.CUSTOM_DOMAIN || 'ark.geops.net' }}
+  PAGES_PROJECT: ${{ vars.MAINSAIL_PAGES_PROJECT || 'ark-explorer-mainsail' }}
+  CUSTOM_DOMAIN: ${{ vars.MAINSAIL_CUSTOM_DOMAIN || 'mainsail.geops.net' }}
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0   # to tell whether a push changed the analyzer
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Reward-sharing data
-        timeout-minutes: 25
-        env:
-          FRESH: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
-          BEFORE: ${{ github.event.before }}
-        run: |
-          # a push that changes the analyzer re-crawls, so the page never shows the old logic's output
-          if [ "$FRESH" != "true" ] && [ "${{ github.event_name }}" = "push" ] && [ -n "$BEFORE" ] &&
-             ! git diff --quiet "$BEFORE" HEAD -- tools/ark-share .github/workflows/deploy.yml 2>/dev/null; then
-            FRESH=true; echo "crawler or workflow changed: crawling"
-          fi
-          live="https://$CUSTOM_DOMAIN/shares.json"
-          [ "$CUSTOM_DOMAIN" = "none" ] && live="https://$PAGES_PROJECT.pages.dev/shares.json"
-          # Cloudflare answers a missing file with index.html (200), so only real share data counts
-          reuse() {
-            curl -sf --max-time 20 -o "$RUNNER_TEMP/live.json" "$live" &&
-              python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["delegates"]' "$RUNNER_TEMP/live.json" 2>/dev/null &&
-              mv "$RUNNER_TEMP/live.json" public/shares.json && echo "Reusing $live"
-          }
-          if [ "$FRESH" != "true" ] && reuse; then exit 0; fi
-          if python3 tools/ark-share/analyzer.py --page public/shares.json > /dev/null; then exit 0; fi
-          echo "::warning::Share crawl failed; keeping the live shares.json"
-          reuse || { rm -f public/shares.json; echo "::warning::No shares.json in this deploy"; }
       - run: npm run check
       - run: npm run build
       - uses: actions/upload-artifact@v4
@@ -81,10 +52,10 @@ jobs:
 
   deploy:
     needs: build
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/ark-mainnet'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/mainsail'
     runs-on: ubuntu-latest
     environment:
-      name: production
+      name: mainsail
       url: ${{ steps.url.outputs.url }}
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -114,7 +85,7 @@ jobs:
           if [ "$code" = "404" ]; then
             echo "Creating Pages project $PAGES_PROJECT"
             curl -sf -X POST "$api" -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H "Content-Type: application/json" \
-              --data "{\"name\":\"$PAGES_PROJECT\",\"production_branch\":\"ark-mainnet\"}" > /tmp/project.json
+              --data "{\"name\":\"$PAGES_PROJECT\",\"production_branch\":\"mainsail\"}" > /tmp/project.json
           elif [ "$code" != "200" ]; then
             echo "::error::Could not read Pages project ($code): $(cat /tmp/project.json)"; exit 1
           fi
@@ -126,7 +97,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy dist --project-name=${{ env.PAGES_PROJECT }} --branch=ark-mainnet --commit-dirty=true
+          command: pages deploy dist --project-name=${{ env.PAGES_PROJECT }} --branch=mainsail --commit-dirty=true
 
       - name: Attach the custom domain and its DNS record
         if: steps.secrets.outputs.ok == 'true' && env.CUSTOM_DOMAIN != 'none'
@@ -170,7 +141,7 @@ jobs:
           fi
           records=$(cf GET "zones/$zone/dns_records?name=$CUSTOM_DOMAIN") || fail "Cannot read DNS records (token needs Zone > DNS > Edit)."
           record=$(jq -r '.[0].id // empty' <<<"$records")
-          body="{\"type\":\"CNAME\",\"name\":\"$CUSTOM_DOMAIN\",\"content\":\"$target\",\"proxied\":true,\"comment\":\"ark-explorer (Cloudflare Pages)\"}"
+          body="{\"type\":\"CNAME\",\"name\":\"$CUSTOM_DOMAIN\",\"content\":\"$target\",\"proxied\":true,\"comment\":\"ark-explorer mainsail (Cloudflare Pages)\"}"
           if [ -n "$record" ]; then
             cf PUT "zones/$zone/dns_records/$record" "$body" > /dev/null || fail "Cannot update the DNS record (token needs Zone > DNS > Edit)."
             echo "Updated DNS record $CUSTOM_DOMAIN -> $target"
