@@ -135,7 +135,7 @@
           <div class="k">Second signature</div>
           <div class="mono break faint">{t.legacySecondSignature} <span class="faint">(legacy, from ARK Core)</span></div>
         {/if}
-        {#if t.data && !t.vendorField}
+        {#if t.data && !(t.vendorField && !(t.typeGroup === 1 && t.type === 6))}
           <div class="k">Data</div>
           <div class="mono break faint data">0x{t.data}</div>
         {/if}

@@ -80,6 +80,12 @@ const wordAt = (d: string, byteOffset: number) => d.slice(8 + byteOffset * 2, 8 
 const num = (w: string) => (w ? BigInt("0x" + w) : 0n);
 const addr = (w: string) => checksum("0x" + w.slice(24));
 
+/** Byte length (after the selector) of the ABI-encoded dynamic array whose offset is word `offsetWord`. */
+function arrayEnd(d: string, offsetWord: number): number {
+  const off = Number(num(word(d, offsetWord)));
+  return off + 32 + Number(num(wordAt(d, off))) * 32;
+}
+
 function decodeArray(d: string, offsetWord: number): string[] {
   const off = Number(num(word(d, offsetWord)));
   const len = Number(num(wordAt(d, off)));
@@ -159,6 +165,13 @@ export function mapTx(t: any): Transaction {
     const recipients = decodeArray(data, 0).map(addr);
     const amounts = decodeArray(data, 1).map((w) => num(w).toString());
     set(1, 6, { payments: failed ? [] : recipients.map((r, i) => ({ recipientId: r, amount: amounts[i] ?? "0" })) });
+    // a memo appended after pay()'s arguments (the contract ignores extra bytes; ark-tbw payouts
+    // carry one, once per multipayment)
+    const end = 8 + Math.max(64, arrayEnd(data, 0), arrayEnd(data, 1)) * 2;
+    if (data.length > end) {
+      const memo = memoText(data.slice(end));
+      if (memo) tx.vendorField = memo;
+    }
   } else if (sameAddress(to, USERNAMES)) {
     if (sel === SEL.username) set(MS_GROUP, MS_TYPE.usernameRegistration, { username: decodeString(data) });
     else if (sel === SEL.usernameResign) set(MS_GROUP, MS_TYPE.usernameResignation);

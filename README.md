@@ -34,7 +34,8 @@ branch.
   fees, reward and its transactions.
 - **Transactions**: a live list of the latest transactions and a detail page for each one. Mainsail transactions are
   EVM calls; the explorer decodes the protocol's own ones into readable types: transfers (with a text memo), votes and
-  unvotes, multipayments (with every recipient), validator registration / update / resignation, username registration
+  unvotes, multipayments (with every recipient, and a text memo appended after the payments, as ark-tbw payouts
+  send), validator registration / update / resignation, username registration
   / resignation, contract deployments and calls, and ERC-20 token transfers and approvals. It shows status (failed
   calls still pay their fee), gas used, gas price and the raw call data. Transactions still waiting in the pool update
   by themselves once they are confirmed.
